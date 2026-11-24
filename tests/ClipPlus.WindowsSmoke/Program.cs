@@ -198,12 +198,59 @@ internal static class Program
             popup.UpdateLayout();
             Check(viewer.VerticalOffset == 0, "scrolling back to top remains functional");
 
+            // Exercise actual desktop input against the native Track/Thumb,
+            // not just calls to ScrollViewer's programmatic scrolling API.
+            var thumb = Descendants<System.Windows.Controls.Primitives.Thumb>(bar).Single();
+            var thumbPoint = thumb.PointToScreen(new Point(thumb.ActualWidth / 2, thumb.ActualHeight / 2));
+            Check(Native.SetCursorPos((int)thumbPoint.X, (int)thumbPoint.Y), "move pointer onto scrollbar");
+            PumpUntil(() => bar.IsMouseOver && Math.Abs(indicator.ActualWidth - (SystemParameters.HighContrast ? 8 : 6)) < 0.5);
+            Check(bar.IsMouseOver && Math.Abs(indicator.ActualWidth - (SystemParameters.HighContrast ? 8 : 6)) < 0.5,
+                "real scrollbar hover expands indicator");
+            var scale = VisualTreeHelper.GetDpi(bar).DpiScaleY;
+            var dragDelta = (int)Math.Round((bar.ActualHeight - thumb.ActualHeight) * scale / 2);
+            Check(dragDelta > 10, "scrollbar has usable thumb travel");
+            InstalledFlow.Drag((int)thumbPoint.X, (int)thumbPoint.Y,
+                (int)thumbPoint.X, (int)thumbPoint.Y + dragDelta);
+            Check(viewer.VerticalOffset > 0, "native scrollbar thumb drag scrolls history");
+            viewer.ScrollToTop();
+            popup.UpdateLayout();
+            InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
+            var pagePoint = bar.PointToScreen(new Point(bar.ActualWidth / 2, bar.ActualHeight - 12));
+            Check(Native.SetCursorPos((int)pagePoint.X, (int)pagePoint.Y), "move pointer onto scrollbar track");
+            InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
+            InstalledFlow.SendMouse(0x0002);
+            try { InstalledFlow.Pump(TimeSpan.FromMilliseconds(80)); }
+            finally { InstalledFlow.SendMouse(0x0004); }
+            PumpUntil(() => viewer.VerticalOffset > 0);
+            Check(viewer.VerticalOffset > 0, "native scrollbar page click scrolls history");
+            viewer.ScrollToTop();
+            popup.UpdateLayout();
+            var wheelPoint = list.PointToScreen(new Point(list.ActualWidth / 2, list.ActualHeight / 2));
+            Check(Native.SetCursorPos((int)wheelPoint.X, (int)wheelPoint.Y), "move pointer onto history");
+            InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
+            InstalledFlow.SendMouse(0x0800, unchecked((uint)-120));
+            PumpUntil(() => viewer.VerticalOffset > 0);
+            Check(viewer.VerticalOffset > 0, "native mouse wheel scrolls history");
+            list.SelectedIndex = 0;
+            viewer.ScrollToTop();
+            popup.UpdateLayout();
+            search.Focus();
+            System.Windows.Input.Keyboard.Focus(search);
+            for (var i = 0; i < 16; i++)
+            {
+                InstalledFlow.SendKeys(InstalledFlow.KeyInput(0x28), InstalledFlow.KeyInput(0x28, true));
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(20));
+            }
+            Check(list.SelectedIndex >= 12 && viewer.VerticalOffset > 0,
+                "keyboard navigation scrolls overflowing history");
+
+
             var notices = ThirdPartyNotices.Read();
             Check(notices.Contains("Microsoft.Data.Sqlite.Core 10.0.15") &&
                   notices.Contains("SQLitePCLRaw.core 2.1.13") &&
                   notices.Contains("Costura.Fody 6.2.0") &&
                   notices.Contains("Apache License") && notices.Contains("Simon Cropp") &&
-                  notices.Contains("Inno Setup License"), "readable embedded third-party notices");
+                  notices.Contains("Microsoft Open Technologies, Inc.") && notices.Contains("Inno Setup License"), "readable embedded third-party notices");
             var small = new Native.Rect { Left = -1280, Top = 0, Right = 0, Bottom = 720 };
             var anchor = new Native.Point { X = -20, Y = 700 };
             var fit = PopupWindow.FitBounds(small, 1.5, anchor, 650, false);

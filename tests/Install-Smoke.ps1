@@ -25,6 +25,13 @@ $uninstallLog = Join-Path $env:RUNNER_TEMP 'clipplus-uninstall-smoke.log'
 $faultLog = Join-Path $env:RUNNER_TEMP 'clipplus-fault-smoke.log'
 $installed = $false
 $portableProcess = $null
+$fixtureRoot = Join-Path $env:RUNNER_TEMP ('clipplus-setup-fixtures-' + [Guid]::NewGuid().ToString('N'))
+# This is a distinct SID-shaped resource fixture, not a second real login.
+$foreignSid = 'S-1-5-21-999991-999992-999993-1001'
+if ($foreignSid -eq $context.Sid) { throw 'Unexpected fixture SID collision.' }
+$foreignShortcut = Join-Path (Split-Path -Parent $context.Shortcut) "ClipPlus-$foreignSid.lnk"
+if (Test-Path -LiteralPath $foreignShortcut) { throw 'Foreign shortcut fixture already exists.' }
+$foreignCreated = $false
 
 function Invoke-Wizard([string]$Path,[string]$Arguments) {
     $process = Start-Process -FilePath $Path -ArgumentList $Arguments -Wait -PassThru
@@ -71,6 +78,100 @@ function Invoke-FailedWizard([string]$Fault) {
     Write-Host "PASS: wizard $Fault failed and transaction rollback ran (exit $($result.ExitCode))."
 }
 
+function Assert-ForeignShortcut {
+    if (-not (Test-Path -LiteralPath $foreignShortcut -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $foreignShortcut -Algorithm SHA256).Hash -ne $foreignShortcutHash) {
+        throw 'A different SID shortcut was changed by this installation.'
+    }
+}
+
+function Invoke-RecoveryWizard {
+    $result = Start-Process -FilePath $faultFile -Wait -PassThru -ArgumentList (
+        "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TestFault=recover-only /LOG=""$faultLog""")
+    $content = Get-Content -LiteralPath $faultLog -Raw
+    if ($content -notmatch 'Fresh wizard recovery completed; test stops before new installation\.' -or
+        (Test-Path -LiteralPath $context.Transaction)) {
+        throw "Fresh wizard did not finish recovery (exit $($result.ExitCode))."
+    }
+}
+
+function Invoke-ScriptFixture([string]$Fault) {
+    # Only isolated CI copies are modified. Release scripts have no test
+    # switches. Environment.Exit bypasses catch/finally rollback.
+    $fixture = Join-Path $fixtureRoot ([Guid]::NewGuid().ToString('N'))
+    $app = Join-Path $fixture 'app'
+    New-Item -ItemType Directory -Path $app -Force | Out-Null
+    foreach ($name in @('Install.ps1','Setup.Common.ps1','Invoke-Setup.ps1')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../scripts/$name") -Destination $fixture
+    }
+    $exe = Join-Path $app 'ClipPlus.exe'
+    Copy-Item -LiteralPath $portableFile -Destination $exe
+    if ($Fault -eq 'activation-failure') {
+        # Non-executable synthetic payload with a matching manifest:
+        # the actual scheduled task must fail to start it.
+        [IO.File]::WriteAllBytes($exe, [byte[]](0,1,2,3))
+    }
+    $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+    if ($Fault -eq 'corrupt-payload') { $hash = '0' * 64 }
+    @{product='AChWorks.ClipPlus';version='0.1.0';rid='windows-anycpu';
+      files=@(@{path='ClipPlus.exe';sha256=$hash})} |
+        ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $fixture 'manifest.json') -Encoding utf8NoBOM
+
+    $script = Join-Path $fixture 'Install.ps1'
+    $source = Get-Content -LiteralPath $script -Raw
+    $anchor = $null
+    $replacement = $null
+    switch ($Fault) {
+        'before-journal' {
+            $anchor = '    New-Item -ItemType Directory -Path $context.Transaction | Out-Null'
+            $replacement = $anchor + [Environment]::NewLine + '    [Environment]::Exit(73)'
+        }
+        'after-move' {
+            $anchor = '        if ($hadApp) { Move-Item -LiteralPath $context.Install -Destination (Join-Path $context.Transaction ''previous-app'') }'
+            $replacement = $anchor + [Environment]::NewLine + '        [Environment]::Exit(73)'
+        }
+        'missing-framework' {
+            $anchor = '    $release = Get-ItemPropertyValue -LiteralPath ''HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full'' -Name Release -ErrorAction SilentlyContinue'
+            $replacement = '    $release = $null'
+        }
+    }
+    if ($null -ne $anchor) {
+        if ([regex]::Matches($source,[regex]::Escape($anchor)).Count -ne 1) { throw "Fixture injection anchor changed: $Fault" }
+        $source.Replace($anchor,$replacement) | Set-Content -LiteralPath $script -Encoding utf8BOM
+    }
+    $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
+    $result = Start-Process -FilePath $powershell -Wait -PassThru -ArgumentList (
+        "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""$fixture\Invoke-Setup.ps1"" -Action Install -ExpectedSid ""$($context.Sid)""")
+    if ($Fault -in @('before-journal','after-move')) {
+        if ($result.ExitCode -ne 73 -or -not (Test-Path -LiteralPath $context.Transaction)) {
+            throw "Abrupt $Fault fixture did not leave the expected journal boundary (exit $($result.ExitCode))."
+        }
+        if ($Fault -eq 'before-journal' -and (Test-Path -LiteralPath (Join-Path $context.Transaction 'state.json'))) {
+            throw 'Preparation fixture unexpectedly has a committed journal.'
+        }
+        if ($Fault -eq 'after-move' -and
+            ((Test-Path -LiteralPath $context.Install) -or -not (Test-Path -LiteralPath (Join-Path $context.Transaction 'previous-app')))) {
+            throw 'Activation interruption did not move the previous package into its protected backup.'
+        }
+        Invoke-RecoveryWizard
+        Write-Host "PASS: fresh wizard recovered abrupt $Fault interruption."
+    } else {
+        if ($result.ExitCode -eq 0 -or (Test-Path -LiteralPath $context.Transaction)) {
+            throw "Expected $Fault rejection/rollback failed (exit $($result.ExitCode))."
+        }
+        $message = Get-Content -LiteralPath (Join-Path $fixture 'setup-error.txt') -Raw
+        $expected = switch ($Fault) {
+            'corrupt-payload' { 'Package integrity check failed' }
+            'missing-framework' { 'requires the Windows .NET Framework 4.7.2' }
+            'activation-failure' { 'readiness|start|task' }
+        }
+        if ($message -notmatch $expected -or $message -match 'Rollback also failed') {
+            throw "Wrong failure path for $Fault : $message"
+        }
+        Write-Host "PASS: $Fault rejected or rolled back without leaving a transaction."
+    }
+}
+
 function Snapshot-History {
     $output = & $testExe --isolated-desktop --snapshot-state --database $database
     if ($LASTEXITCODE -ne 0 -or $output -notmatch '^[0-9A-F]{64}$') { throw 'Could not snapshot retained synthetic history.' }
@@ -87,6 +188,15 @@ function Remove-Wizard {
 try {
     if ((Test-Path -LiteralPath $context.Install) -or $null -ne (Get-OwnedTask $context) -or
         (Test-Path -LiteralPath $registration)) { throw 'Runner already contains an installation; refusing to touch it.' }
+
+    New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
+    $shell = New-Object -ComObject WScript.Shell
+    $foreignLink = $shell.CreateShortcut($foreignShortcut)
+    $foreignLink.TargetPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'schtasks.exe'
+    $foreignLink.Arguments = "/run /tn ""ClipPlus-$foreignSid"""
+    $foreignLink.Save()
+    $foreignCreated = $true
+    $foreignShortcutHash = (Get-FileHash -LiteralPath $foreignShortcut -Algorithm SHA256).Hash
 
     # Execute the exact bare portable file, without the build directory,
     # companion assemblies, application config, or modern .NET host.
@@ -109,6 +219,9 @@ try {
     $portableProcess.WaitForExit()
     $portableProcess = $null
 
+    Invoke-ScriptFixture 'before-journal'
+    Assert-NoInstallation
+    Assert-ForeignShortcut
     Invoke-FailedWizard 'after-activation'
     Assert-NoInstallation
     Invoke-FailedWizard 'cancel-install'
@@ -160,14 +273,28 @@ try {
     $oldExe = (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash
     $oldUninstaller = Read-Registration
     $oldUninstallHash = (Get-FileHash -LiteralPath $oldUninstaller -Algorithm SHA256).Hash
+    $oldShortcutHash = (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash
+    $ownShortcut = $shell.CreateShortcut($context.Shortcut)
+    if ($ownShortcut.Arguments -notmatch [regex]::Escape($context.Task)) { throw 'Shortcut does not launch its own SID-scoped task.' }
     $oldAppMarker = Join-Path $context.Install 'previous-package-smoke.txt'
     Set-Content -LiteralPath $oldAppMarker -Value 'only in previous package'
     $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
-    foreach ($fault in @('after-activation','cancel-install')) {
-        Invoke-FailedWizard $fault
+    foreach ($fault in @('after-activation','cancel-install','after-move','interrupt-wizard','corrupt-payload','missing-framework','activation-failure')) {
+        if ($fault -eq 'interrupt-wizard') {
+            $result = Start-Process -FilePath $faultFile -Wait -PassThru -ArgumentList (
+                "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /TestFault=$fault /LOG=""$faultLog""")
+            if ($result.ExitCode -eq 0 -or -not (Test-Path -LiteralPath $context.Transaction)) {
+                throw 'Abrupt wizard fixture did not leave its uncommitted transaction.'
+            }
+            Invoke-RecoveryWizard
+            Write-Host 'PASS: new wizard recovered abrupt termination before final commit.'
+        } elseif ($fault -in @('after-activation','cancel-install')) { Invoke-FailedWizard $fault }
+        else { Invoke-ScriptFixture $fault }
+        Assert-ForeignShortcut
         $restoredUninstaller = Read-Registration
         if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $oldExe -or
             (Get-FileHash -LiteralPath $restoredUninstaller -Algorithm SHA256).Hash -ne $oldUninstallHash -or
+            (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $oldShortcutHash -or
             (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
             (Get-OwnedTask $context).State -ne 'Running' -or
             -not (Test-Path -LiteralPath $oldAppMarker) -or
@@ -183,6 +310,7 @@ try {
     if ((Snapshot-History) -ne $historyBefore) { throw 'Update changed pinned clip, original payload or settings.' }
     $afterUpdate = (Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json).WindowPosition
     if ($afterUpdate.X -ne $savedPosition.X -or $afterUpdate.Y -ne $savedPosition.Y) { throw 'Update changed saved position.' }
+    Assert-ForeignShortcut
     Write-Host 'PASS: Setup update preserved state and popup position.'
     & $testExe --isolated-desktop --installed-flow --shortcut WinV --database $database --verify-saved-geometry
     if ($LASTEXITCODE -ne 0) { throw "Restart geometry verification failed ($LASTEXITCODE)." }
@@ -190,7 +318,10 @@ try {
     Remove-Wizard
     $installed = $false
     if ((Snapshot-History) -ne $historyBefore) { throw 'Uninstall changed pinned clip, original payload or settings.' }
+    if (Test-Path -LiteralPath $context.Shortcut) { throw 'Own SID shortcut survived uninstall.' }
+    Assert-ForeignShortcut
     Write-Host 'PASS: standard uninstaller removed app, task and Installed Apps entry; history preserved.'
+    Write-Host 'PASS: different SID shortcut fixture remained unchanged throughout installation, rollback, update and uninstall.'
 
     # Test the unchecked option on the actual account. Limited startup
     # uses its ordinary token, which can itself be administrative under
@@ -217,6 +348,8 @@ try {
     throw
 } finally {
     if ($null -ne $portableProcess -and -not $portableProcess.HasExited) { Stop-Process -Id $portableProcess.Id -Force }
+    if ($foreignCreated -and (Test-Path -LiteralPath $foreignShortcut)) { Remove-Item -LiteralPath $foreignShortcut -Force }
+    if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
     if ($installed -and (Test-Path -LiteralPath $registration)) {
         try { Remove-Wizard } catch { Write-Warning "Runner cleanup: $_" }
     }

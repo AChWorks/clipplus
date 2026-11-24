@@ -297,7 +297,7 @@ internal static class InstalledFlow
         }, "mouse resized bottom edge and persisted height");
     }
 
-    private static void Drag(int x, int y, int endX, int endY)
+    internal static void Drag(int x, int y, int endX, int endY)
     {
         if (!Native.SetCursorPos(x, y)) throw Native.Error("Move test cursor");
         Pump(TimeSpan.FromMilliseconds(80));
@@ -316,16 +316,16 @@ internal static class InstalledFlow
         Pump(TimeSpan.FromMilliseconds(120));
     }
 
-    private static void SendMouse(uint flags)
+    internal static void SendMouse(uint flags, uint data = 0)
     {
         SendKeys(new Native.Input
         {
             Type = 0,
-            Data = new Native.InputData { Mouse = new Native.MouseInput { Flags = flags } }
+            Data = new Native.InputData { Mouse = new Native.MouseInput { Flags = flags, MouseData = data } }
         });
     }
 
-    private static Native.Input KeyInput(ushort key, bool up = false) => new()
+    internal static Native.Input KeyInput(ushort key, bool up = false) => new()
     {
         Type = 1,
         Data = new Native.InputData { Keyboard = new Native.KeyboardInput
@@ -336,7 +336,7 @@ internal static class InstalledFlow
         } }
     };
 
-    private static void SendKeys(params Native.Input[] keys)
+    internal static void SendKeys(params Native.Input[] keys)
     {
         if (Native.SendInput((uint)keys.Length, keys, Marshal.SizeOf<Native.Input>()) != keys.Length)
             throw Native.Error("Test input");
@@ -357,7 +357,7 @@ internal static class InstalledFlow
         throw new InvalidOperationException($"FAIL: {operation}");
     }
 
-    private static void Pump(TimeSpan duration)
+    internal static void Pump(TimeSpan duration)
     {
         var frame = new DispatcherFrame();
         var timer = new DispatcherTimer { Interval = duration };

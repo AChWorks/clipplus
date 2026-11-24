@@ -2,7 +2,7 @@
 #Requires -RunAsAdministrator
 [CmdletBinding()]
 param(
-    [ValidateSet('Prepare','Commit','Rollback')][string]$Phase = 'Prepare',
+    [ValidateSet('Prepare','Commit','Rollback','Recover')][string]$Phase = 'Prepare',
     [switch]$NormalStartup
 )
 . (Join-Path $PSScriptRoot 'Setup.Common.ps1')
@@ -92,7 +92,14 @@ function Assert-Tree($Path) {
 function Write-TransactionState($Context, $State) {
     $file = Join-Path $Context.Transaction 'state.json'
     $temporary = "$file.tmp"
-    [IO.File]::WriteAllText($temporary, ($State | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+    # Write-ahead state: flush before the atomic rename, before changing live
+    # resources. A partial .tmp file is never an authoritative journal.
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($State | ConvertTo-Json -Depth 4))
+    $stream = [IO.File]::Open($temporary, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    } finally { $stream.Dispose() }
     if (Test-Path -LiteralPath $file) { [IO.File]::Replace($temporary, $file, [NullString]::Value) }
     else { [IO.File]::Move($temporary, $file) }
 }
@@ -102,8 +109,17 @@ function Read-TransactionState($Context) {
     $file = Join-Path $Context.Transaction 'state.json'
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
     $state = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
-    if ($state.product -ne 'AChWorks.ClipPlus' -or $state.sid -ne $Context.Sid) {
-        throw 'Unexpected setup transaction identity.'
+    if ($state.product -ne 'AChWorks.ClipPlus' -or $state.sid -ne $Context.Sid -or
+        $state.phase -notin @('preparing','activating','committed','rolled-back') -or
+        [string]::IsNullOrWhiteSpace($state.wizard)) {
+        throw 'Unexpected setup transaction identity or phase.'
+    }
+    foreach ($field in @('hadApp','hadTask','wasRunning','hadRegistration','hadShortcut')) {
+        if ($state.$field -isnot [bool]) { throw "Invalid setup transaction flag: $field" }
+    }
+    if ($state.hadApp -and ($state.previousExeHash -notmatch '^[a-fA-F0-9]{64}$' -or
+        $state.previousMarkerHash -notmatch '^[a-fA-F0-9]{64}$')) {
+        throw 'Invalid previous-package identity.'
     }
     return $state
 }
@@ -150,23 +166,71 @@ function Restore-Registration($Context, $State) {
     }
 }
 
+function Remove-Transaction($Context) {
+    Assert-Tree $Context.Transaction
+    $file = Join-Path $Context.Transaction 'state.json'
+    foreach ($entry in @(Get-ChildItem -LiteralPath $Context.Transaction -Force)) {
+        if ($entry.FullName -ine $file) {
+            Remove-Item -LiteralPath $entry.FullName -Recurse -Force
+        }
+    }
+    if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
+    Remove-Item -LiteralPath $Context.Transaction
+}
+
+function Assert-PreviousPackage($Context, $State, [string]$Path) {
+    Assert-Tree $Path
+    Assert-OwnedInstall $Context $Path
+    if ((Get-PackageHash (Join-Path $Path 'ClipPlus.exe')) -ine $State.previousExeHash -or
+        (Get-PackageHash (Join-Path $Path 'clipplus-install.json')) -ine $State.previousMarkerHash) {
+        throw "Previous installation identity does not match the saved transaction: $Path"
+    }
+}
+
+function Assert-RecoverySnapshots($Context, $State) {
+    # Check complete snapshots before touching the live install. A missing
+    # previous-app can mean it was not moved yet or has already been restored.
+    $backup = Join-Path $Context.Transaction 'previous-app'
+    if ($State.hadApp) {
+        $previous = if (Test-Path -LiteralPath $backup) { $backup } else { $Context.Install }
+        Assert-PreviousPackage $Context $State $previous
+    } elseif (Test-Path -LiteralPath $backup) {
+        throw 'Unexpected previous application backup.'
+    }
+    if ($State.hadTask -and -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'previous-task.xml') -PathType Leaf)) {
+        throw 'Previous scheduled task snapshot is missing.'
+    }
+    if ($State.hadRegistration -and
+        (-not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'registration.reg') -PathType Leaf) -or
+         -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'registration') -PathType Container))) {
+        throw 'Previous Installed Apps snapshot is missing.'
+    }
+    if ($State.hadShortcut -and -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'ClipPlus.lnk') -PathType Leaf)) {
+        throw 'Previous shortcut snapshot is missing.'
+    }
+}
+
 function Undo-Activation($Context, $State) {
+    Assert-RecoverySnapshots $Context $State
     $backup = Join-Path $Context.Transaction 'previous-app'
     Stop-ClipPlus $Context
     if ($null -ne (Get-OwnedTask $Context)) {
         Unregister-ScheduledTask -TaskName $Context.Task -TaskPath '\' -Confirm:$false
     }
     if (Test-Path -LiteralPath $backup) {
-        Assert-OwnedInstall $Context $backup
+        Assert-PreviousPackage $Context $State $backup
         if (Test-Path -LiteralPath $Context.Install) {
+            Assert-Tree $Context.Install
             Assert-OwnedInstall $Context $Context.Install
             Remove-Item -LiteralPath $Context.Install -Recurse -Force
         }
         Move-Item -LiteralPath $backup -Destination $Context.Install
     } elseif (-not $State.hadApp -and (Test-Path -LiteralPath $Context.Install)) {
+        Assert-Tree $Context.Install
         Assert-OwnedInstall $Context $Context.Install
         Remove-Item -LiteralPath $Context.Install -Recurse -Force
     }
+    if ($State.hadApp) { Assert-PreviousPackage $Context $State $Context.Install }
     if ($State.hadTask) {
         $xml = Get-Content -LiteralPath (Join-Path $Context.Transaction 'previous-task.xml') -Raw
         Register-ScheduledTask -TaskName $Context.Task -TaskPath '\' -Xml $xml -Force | Out-Null
@@ -176,18 +240,56 @@ function Undo-Activation($Context, $State) {
 
 function Undo-Transaction($Context, $State) {
     if ($State.phase -eq 'committed') { throw 'The setup transaction already committed.' }
-    if ($State.phase -ne 'rolled-back') {
-        if ($State.phase -eq 'activating') { Undo-Activation $Context $State }
+    if ($State.phase -eq 'activating') {
+        Undo-Activation $Context $State
         Restore-Registration $Context $State
         $State.phase = 'rolled-back'
         Write-TransactionState $Context $State
     }
-    Remove-Item -LiteralPath $Context.Transaction -Recurse -Force
+    # Preparing never changes live resources. A terminal rolled-back journal
+    # also needs only cleanup, even after an interruption during cleanup.
+    Remove-Transaction $Context
+}
+
+function Recover-Transaction($Context) {
+    if (-not (Test-Path -LiteralPath $Context.Transaction)) { return }
+    Assert-Tree $Context.Transaction
+    $state = Read-TransactionState $Context
+    if ($null -eq $state) {
+        # The first journal is written before snapshots or live mutations.
+        # Only an empty directory or its incomplete initial temporary file is
+        # known safe. Never discard an unexplained backup or unknown files.
+        $unexpected = @(Get-ChildItem -LiteralPath $Context.Transaction -Force |
+            Where-Object { $_.Name -ne 'state.json.tmp' -or $_.PSIsContainer })
+        if ($unexpected.Count -ne 0) {
+            throw "Setup journal is missing but transaction contains unexpected resources: $($Context.Transaction)"
+        }
+        Remove-Transaction $Context
+        Write-Host 'Recovered an interrupted initial preparation.'
+        return
+    }
+    if ($state.phase -eq 'committed') {
+        Remove-Transaction $Context
+        Write-Host 'Completed cleanup of committed setup.'
+        return
+    }
+    $phase = $state.phase
+    Undo-Transaction $Context $state
+    Write-Host "Recovered interrupted setup ($phase). Previous installation and clipboard data preserved."
 }
 
 $context = Get-ClipPlusContext
 $mutex = Enter-SetupLock $context
 try {
+    if ($Phase -eq 'Recover') {
+        # Inno serializes complete wizards with SetupMutex; this also
+        # serializes against an orphaned activation script still running.
+        if (-not (Test-Path -LiteralPath $context.Transaction)) { return }
+        Initialize-InstallRoot $context.Root
+        try { Recover-Transaction $context }
+        catch { throw "Setup recovery failed: $_. Preserve $($context.Transaction) and retry with a trusted installer after correcting the reported error." }
+        return
+    }
     if ($Phase -ne 'Prepare') {
         if (-not (Test-Path -LiteralPath $context.Transaction)) {
             if ($Phase -eq 'Rollback') { return }
@@ -208,7 +310,7 @@ try {
             Assert-OwnedInstall $context $context.Install
             $state.phase = 'committed'
             Write-TransactionState $context $state
-            try { Remove-Item -LiteralPath $context.Transaction -Recurse -Force }
+            try { Remove-Transaction $context }
             catch { Write-Warning "Installation committed; backup cleanup pending: $($context.Transaction)" }
         }
         return
@@ -221,12 +323,7 @@ try {
     Assert-Framework
     Initialize-InstallRoot $context.Root
     if (Test-Path -LiteralPath $context.Transaction) {
-        $oldState = Read-TransactionState $context
-        if ($null -ne $oldState -and $oldState.phase -in @('committed','rolled-back')) {
-            Remove-Item -LiteralPath $context.Transaction -Recurse -Force
-        } else {
-            throw "An interrupted ClipPlus setup transaction requires recovery. Preserve $($context.Transaction) and contact support."
-        }
+        throw 'A setup transaction remains. Close Setup and start it again to recover the previous installation.'
     }
     $hadApp = Test-Path -LiteralPath $context.Install
     if ($hadApp) { Assert-OwnedInstall $context $context.Install }
@@ -236,8 +333,10 @@ try {
         product = 'AChWorks.ClipPlus'
         sid = $context.Sid
         wizard = $PSScriptRoot
-        phase = 'prepared'
+        phase = 'preparing'
         hadApp = $hadApp
+        previousExeHash = if ($hadApp) { Get-PackageHash $context.Exe } else { '' }
+        previousMarkerHash = if ($hadApp) { Get-PackageHash (Join-Path $context.Install 'clipplus-install.json') } else { '' }
         hadTask = $null -ne $previousTask
         wasRunning = $null -ne $previousTask -and $previousTask.State -eq 'Running'
         hadRegistration = $hadRegistration
@@ -246,6 +345,8 @@ try {
     New-Item -ItemType Directory -Path $context.Transaction | Out-Null
     $journalWritten = $false
     try {
+        Write-TransactionState $context $state
+        $journalWritten = $true
         Save-Registration $context $state
         if ($state.hadTask) {
             Export-ScheduledTask -TaskName $context.Task -TaskPath '\' |
@@ -268,7 +369,6 @@ try {
         # package stays in the transaction until the wizard itself commits.
         $state.phase = 'activating'
         Write-TransactionState $context $state
-        $journalWritten = $true
         Stop-ClipPlus $context
         if ($hadApp) { Move-Item -LiteralPath $context.Install -Destination (Join-Path $context.Transaction 'previous-app') }
         Move-Item -LiteralPath $stage -Destination $context.Install
@@ -278,8 +378,8 @@ try {
     } catch {
         $failure = $_
         try {
-            if ($journalWritten) { Undo-Transaction $context $state }
-            else { Remove-Item -LiteralPath $context.Transaction -Recurse -Force }
+            if ($journalWritten) { Recover-Transaction $context }
+            else { Remove-Transaction $context }
         } catch {
             throw "Install failed: $failure. Rollback also failed: $_. Preserve $($context.Transaction) for recovery."
         }

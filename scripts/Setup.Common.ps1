@@ -25,7 +25,7 @@ function Get-ClipPlusContext {
         Task = "ClipPlus-$sid"
         RegistrationDir = Join-Path (Join-Path $root 'Installers') $sid
         RegistrationKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ClipPlus-$($sid)_is1"
-        Shortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)) 'ClipPlus.lnk'
+        Shortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)) "ClipPlus-$sid.lnk"
         Transaction = Join-Path $root ".transaction-$sid"
     }
 }

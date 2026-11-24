@@ -2,7 +2,7 @@
 #Requires -RunAsAdministrator
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('Identity','Install','Commit','Rollback','Uninstall')][string]$Action,
+    [Parameter(Mandatory)][ValidateSet('Identity','Install','Commit','Rollback','Recover','Uninstall')][string]$Action,
     [switch]$NormalStartup,
     [string]$ExpectedSid = ''
 )
@@ -29,6 +29,9 @@ try {
         }
         Install {
             & (Join-Path $PSScriptRoot 'Install.ps1') -NormalStartup:$NormalStartup
+        }
+        Recover {
+            & (Join-Path $PSScriptRoot 'Install.ps1') -Phase Recover
         }
         Commit {
             & (Join-Path $PSScriptRoot 'Install.ps1') -Phase Commit

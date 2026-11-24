@@ -29,6 +29,14 @@ f62ca0009b038cab4725a720f386623a969d73ad.
 SQLitePCLRaw: Copyright 2014-2024 SourceGear, LLC (NuGet package metadata).
 Apache-2.0 license from https://github.com/ericsink/SQLitePCL.raw/tree/v2.1.11.
 The Windows SQLite provider is distributed unmodified; no native SQLite engine is bundled.
+Upstream NOTICE.TXT (v2.1.11 and v2.1.12 identical Git blob
+9b4d10b6022750c492749e0b4bb22b0f0e70ef5b) includes Microsoft Open
+Technologies attribution. It is included in full for upstream attribution;
+SQLCipher, OpenSSL and a separate SQLite engine are NOT redistributed by ClipPlus.
+SQLitePCLRaw.core 2.1.13: exact NuGet package metadata declares Apache-2.0,
+SourceGear copyright and the same upstream repository. No v2.1.13 source
+tag or repository commit is published in its package metadata; no exact
+source-tag equivalence is asserted.
 
 Costura: Copyright (c) 2012 Simon Cropp and contributors.
 Source: https://github.com/Fody/Costura/tree/6.2.0.

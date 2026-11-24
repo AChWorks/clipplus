@@ -59,7 +59,7 @@ Source: "{#PayloadDir}\Invoke-Setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\Uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{commonprograms}\ClipPlus"; Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn ""ClipPlus-{code:UserSid}"""; IconFilename: "{code:InstalledExe}"; Flags: runminimized
+Name: "{commonprograms}\ClipPlus-{code:UserSid}"; Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn ""ClipPlus-{code:UserSid}"""; IconFilename: "{code:InstalledExe}"; Flags: runminimized
 
 [UninstallDelete]
 Type: files; Name: "{app}\setup-error.txt"
@@ -70,6 +70,9 @@ var
   TransactionPrepared, TransactionCommitted, CommitFailed: Boolean;
 #ifdef FaultHarness
   CancelInjected: Boolean;
+
+procedure TerminateTestWizard(ExitCode: Cardinal);
+  external 'ExitProcess@kernel32.dll stdcall';
 #endif
 
 function UserSid(Param: String): String;
@@ -137,12 +140,31 @@ begin
   if not Result then SuppressibleMsgBox('Invalid installing user identity.', mbError, MB_OK, IDOK);
 end;
 
+// InitializeWizard occurs after Inno Setup acquires SetupMutex, unlike
+// InitializeSetup. A fresh wizard may recover only then.
+procedure InitializeWizard;
+var
+  Error: String;
+begin
+  ExtractTemporaryFile('Install.ps1');
+  Error := RunAction(ExpandConstant('{tmp}'), 'Recover', '-ExpectedSid "' + CurrentSid + '"');
+  if Error <> '' then begin
+    SuppressibleMsgBox(Error, mbError, MB_OK, IDOK);
+    Abort;
+  end;
+#ifdef FaultHarness
+  if ExpandConstant('{param:TestFault|}') = 'recover-only' then begin
+    Log('Fresh wizard recovery completed; test stops before new installation.');
+    Abort;
+  end;
+#endif
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Options: String;
 begin
   try
-    ExtractTemporaryFile('Install.ps1');
     ExtractTemporaryFile('Uninstall.ps1');
     ExtractTemporaryFile('manifest.json');
     ExtractTemporaryFiles('{tmp}\app\*');
@@ -177,6 +199,10 @@ begin
 #ifdef FaultHarness
   if (Step = ssInstall) and (ExpandConstant('{param:TestFault|}') = 'after-activation') then
     RaiseException('Injected test-only wizard failure after application activation.');
+  if (Step = ssPostInstall) and (ExpandConstant('{param:TestFault|}') = 'interrupt-wizard') then begin
+    Log('Test-only abrupt wizard termination after installation and before commit.');
+    TerminateTestWizard(73);
+  end;
 #endif
   if (Step = ssDone) and TransactionPrepared then begin
     Error := RunAction(ExpandConstant('{tmp}'), 'Commit', '-ExpectedSid "' + CurrentSid + '"');

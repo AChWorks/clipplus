@@ -12,10 +12,13 @@ try {
         $file = Join-Path $context.Transaction 'state.json'
         Assert-NoReparsePoint $context.Transaction
         Assert-NoReparsePoint $file
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            throw 'Run ClipPlus-Setup.exe again to recover interrupted setup, then uninstall.'
+        }
         $state = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
         if ($state.product -ne 'AChWorks.ClipPlus' -or $state.sid -ne $context.Sid -or
             $state.phase -notin @('committed','rolled-back')) {
-            throw "Complete or recover the pending ClipPlus setup before uninstalling: $($context.Transaction)"
+            throw "Run ClipPlus-Setup.exe again to recover the pending installation before uninstalling: $($context.Transaction)"
         }
     }
     if (Test-Path -LiteralPath $context.Install) { Assert-OwnedInstall $context $context.Install }
