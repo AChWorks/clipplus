@@ -39,6 +39,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=no
+AllowCancelDuringInstall=yes
 RestartApplications=no
 MinVersion=10.0
 ChangesAssociations=no

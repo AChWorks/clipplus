@@ -58,8 +58,11 @@ function Assert-NoInstallation {
 }
 
 function Invoke-FailedWizard([string]$Fault) {
+    # Inno Setup ignores Close on a hidden /VERYSILENT wizard.
+    # Exercise actual cancellation through its visible installing page.
+    $mode = if ($Fault -eq 'cancel-install') { '/SILENT' } else { '/VERYSILENT' }
     $result = Start-Process -FilePath $faultFile -Wait -PassThru -ArgumentList (
-        "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /TestFault=$Fault /LOG=""$faultLog""")
+        "$mode /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /TestFault=$Fault /LOG=""$faultLog""")
     if ($result.ExitCode -eq 0) { throw "Injected wizard $Fault unexpectedly succeeded." }
     $content = Get-Content -LiteralPath $faultLog -Raw
     if ($content -notmatch 'ClipPlus transaction rolled back\.') {
