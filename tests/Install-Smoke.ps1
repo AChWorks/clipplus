@@ -15,6 +15,7 @@ if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentPro
 $directory = Join-Path $env:RUNNER_TEMP ('clipplus-install-smoke-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $directory | Out-Null
 $installed = $false
+$context = $null
 try {
     Expand-Archive -LiteralPath $Package -DestinationPath $directory
     . (Join-Path $directory 'Setup.Common.ps1')
@@ -70,7 +71,7 @@ try {
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Uninstall removed durable state.' }
     Write-Host 'PASS: uninstall removed app/task and preserved state.'
 } catch {
-    if ($installed) {
+    if ($null -ne $context) {
         $diagnostics = Join-Path $context.Data 'diagnostics.log'
         if (Test-Path -LiteralPath $diagnostics) { Get-Content -LiteralPath $diagnostics -Tail 30 | Write-Host }
     }

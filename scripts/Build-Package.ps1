@@ -25,7 +25,8 @@ try {
     $publish = @('publish', $project, '-c', 'Release', '-r', $Runtime, '-o', $app,
         '--nologo', '-p:DebugType=None', '-p:DebugSymbols=false')
     if ($SelfContained) {
-        $publish += @('--self-contained', 'true')
+        # Use only the runtime shipped alongside the protected executable.
+        $publish += @('--self-contained', 'true', '-p:AppHostDotNetSearch=AppLocal')
     } else {
         # All native dependencies come from Windows. Keep one executable and
         # use the machine-wide Desktop Runtime; no user-temp DLL extraction.
