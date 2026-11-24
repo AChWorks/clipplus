@@ -82,8 +82,10 @@ public sealed class ClipPayload
         new(new Dictionary<ClipFormat, byte[]> { [ClipFormat.UnicodeText] = Encoding.Unicode.GetBytes(text + "\0") });
 }
 
+public sealed record ClipCategory(long Id, string Name);
+
 public sealed record ClipItem(long Id, string Title, ClipColor Color, bool Pinned,
-    string Text, bool HasImage, bool HasHtml)
+    string Text, bool HasImage, bool HasHtml, long? CategoryId = null)
 {
     public bool TitleMatches(string query) => !string.IsNullOrWhiteSpace(query) &&
         Title.Length > 0 && Title.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;

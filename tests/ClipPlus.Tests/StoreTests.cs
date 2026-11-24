@@ -7,16 +7,16 @@ namespace ClipPlus.Tests;
 public sealed class StoreTests
 {
     [Fact]
-    public void RetainsFiftyRecentAndAllPins()
+    public void RetainsOneHundredRecentAndAllPins()
     {
         using var store = new ClipStore(":memory:");
         var pin = store.Capture(ClipPayload.FromText("pinned"));
         store.SetPinned(pin, true);
-        for (var i = 0; i < 75; i++) store.Capture(ClipPayload.FromText($"item {i}"));
+        for (var i = 0; i < 125; i++) store.Capture(ClipPayload.FromText($"item {i}"));
         var rows = store.List();
-        Assert.Equal(51, rows.Count);
+        Assert.Equal(101, rows.Count);
         Assert.Equal(pin, rows[0].Id);
-        Assert.Equal("item 74", rows[1].Text);
+        Assert.Equal("item 124", rows[1].Text);
         Assert.Equal("item 25", rows[rows.Count - 1].Text);
         store.ClearRecent();
         Assert.Equal(pin, Assert.Single(store.List()).Id);
@@ -50,9 +50,9 @@ public sealed class StoreTests
         var pin = store.Capture(ClipPayload.FromText("pin"));
         store.SetPinned(pin, true);
         store.SetColor(pin, ClipColor.Purple);
-        for (var i = 0; i < 50; i++) store.Capture(ClipPayload.FromText($"{i}"));
+        for (var i = 0; i < 100; i++) store.Capture(ClipPayload.FromText($"{i}"));
         store.SetPinned(pin, false);
-        Assert.Equal(50, store.List().Count);
+        Assert.Equal(100, store.List().Count);
         Assert.Equal(pin, store.List()[0].Id);
         Assert.Equal(ClipColor.Purple, store.List()[0].Color);
         store.SetColor(pin, ClipColor.Default);
@@ -163,7 +163,7 @@ public sealed class StoreTests
                 Assert.Equal(ClipColor.Pink, item.Color);
             }
             var file = Path.Combine(directory, "settings.json");
-            var preferences = new Preferences { WindowHeight = 734, WindowPosition = new WindowPosition(-1500, 240), Shortcut = Shortcut.CtrlAltV };
+            var preferences = new Preferences { WindowHeight = 734, WindowPosition = new WindowPosition(-1500, 240), Shortcut = Shortcut.CtrlAltV, CompactView = true, ActiveView = 7 };
             preferences.Save(file);
             Assert.Equal(preferences, Preferences.Load(file));
         }

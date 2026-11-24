@@ -64,7 +64,7 @@ public partial class App : Application
             _messages.AddHook(WindowMessage);
             _clipboard = new WindowsClipboard(_messages.Handle);
             _shortcut = new ShortcutManager(_messages.Handle);
-            _popup = new PopupWindow(_store, PasteAsync, SaveGeometry, Report, () => _preferences);
+            _popup = new PopupWindow(_store, PasteAsync, SaveGeometry, Report, () => _preferences, SaveView);
             _popup.Closed += (_, _) => { if (!_exiting) Shutdown(); };
             MainWindow = _popup;
             CreateTray();
@@ -338,6 +338,14 @@ public partial class App : Application
             WindowHeight = height ?? _preferences.WindowHeight,
             WindowPosition = position ?? _preferences.WindowPosition
         };
+        if (next == _preferences) return;
+        _preferences = next;
+        SavePreferences();
+    }
+
+    private void SaveView(long view, bool compact)
+    {
+        var next = _preferences with { ActiveView = view, CompactView = compact };
         if (next == _preferences) return;
         _preferences = next;
         SavePreferences();

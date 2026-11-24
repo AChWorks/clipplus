@@ -14,6 +14,8 @@ public sealed record Preferences
     public double WindowHeight { get; init; } = 520;
     public WindowPosition? WindowPosition { get; init; }
     public Shortcut Shortcut { get; init; } = Shortcut.WinV;
+    public bool CompactView { get; init; }
+    public long? ActiveView { get; init; }
 
     public static Preferences Load(string path)
     {

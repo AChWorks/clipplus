@@ -12,6 +12,7 @@
                             GlassFrameThickness="0" CornerRadius="8" />
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
+        <GridLength x:Key="HistoryGutter">12</GridLength>
         <Style TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
@@ -84,18 +85,23 @@
     </Window.Resources>
     <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}" Padding="11,9,11,7">
         <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="{StaticResource HistoryGutter}"/>
+            </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <DockPanel LastChildFill="True" Margin="0,0,0,8">
+            <DockPanel Grid.ColumnSpan="2" LastChildFill="True" Margin="0,0,0,8">
                 <Button x:Name="CloseButton" DockPanel.Dock="Right" Width="28" ToolTip="Close (Esc)"
                         AutomationProperties.Name="Close clipboard" Content="&#x2715;"/>
-                <Button x:Name="ClearButton" DockPanel.Dock="Right" ToolTip="Clear recent items; keep pinned items"
-                        AutomationProperties.Name="Clear recent items" Content="Clear"/>
+                <Button x:Name="ClearButton" DockPanel.Dock="Right" ToolTip="Clear all recent items, including categorized items; keep pinned items"
+                        AutomationProperties.Name="Clear recent items" Content="Clear recent"/>
                 <Border x:Name="DragHeader" Background="Transparent" Cursor="SizeAll" ToolTip="Drag to move"
                         AutomationProperties.Name="Move clipboard window">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -104,7 +110,7 @@
                     </StackPanel>
                 </Border>
             </DockPanel>
-            <Grid Grid.Row="1" Margin="0,0,0,9">
+            <Grid Grid.Row="1" Margin="0,0,0,5">
                 <TextBox x:Name="SearchBox" Height="34" Padding="28,5,6,5"
                          AutomationProperties.Name="Search clipboard" ToolTip="Search titles and clipboard text"/>
                 <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" Margin="9,0,0,0"
@@ -112,11 +118,33 @@
                 <TextBlock x:Name="SearchPlaceholder" Text="Search clipboard..." Margin="30,0,0,0"
                            Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" IsHitTestVisible="False"/>
             </Grid>
-            <Grid Grid.Row="2">
+            <Grid Grid.Row="2" Margin="0,0,0,5">
+                <Grid x:Name="CategoryNavigation">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="PinnedTab" Content="Pinned" AutomationProperties.Name="Pinned clips"/>
+                    <Button x:Name="RecentTab" Grid.Column="1" Content="Recent" AutomationProperties.Name="Recent clips"/>
+                    <ScrollViewer x:Name="CategoryScroll" Grid.Column="2" Margin="3,0"
+                                  HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                                  Focusable="False" CanContentScroll="False" AllowDrop="True" Background="Transparent">
+                        <StackPanel x:Name="CategoryTabs" Orientation="Horizontal" Background="Transparent"/>
+                    </ScrollViewer>
+                    <Button x:Name="AddCategoryButton" Grid.Column="3" Width="26" Content="+"
+                            FontSize="16" ToolTip="Add category" ToolTipService.ShowOnDisabled="True"
+                            AutomationProperties.Name="Add category"/>
+                </Grid>
+                <TextBlock x:Name="SearchScope" Text="All matches" Visibility="Collapsed" FontSize="11"
+                           Foreground="{DynamicResource MutedBrush}" Margin="3,4,0,4"/>
+            </Grid>
+            <Grid Grid.Row="3" Grid.ColumnSpan="2">
                 <ListBox x:Name="ClipList" BorderThickness="0" Background="Transparent"
-                         Foreground="{DynamicResource TextBrush}" Padding="0,0,3,0"
+                         Foreground="{DynamicResource TextBrush}" Padding="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.VerticalScrollBarVisibility="Visible"
                          ScrollViewer.CanContentScroll="False"
                          AutomationProperties.Name="Clipboard history">
                     <ListBox.Resources>
@@ -124,13 +152,13 @@
                              Windows 11-style indicator: thin at rest, wider on hover,
                              with a comfortable invisible pointer target. -->
                         <Style TargetType="{x:Type ScrollBar}">
-                            <Setter Property="Width" Value="12"/>
-                            <Setter Property="MinWidth" Value="12"/>
+                            <Setter Property="Width" Value="{Binding Value, Source={StaticResource HistoryGutter}}"/>
+                            <Setter Property="MinWidth" Value="{Binding Value, Source={StaticResource HistoryGutter}}"/>
                             <Setter Property="Background" Value="Transparent"/>
                             <Setter Property="Template">
                                 <Setter.Value>
                                     <ControlTemplate TargetType="{x:Type ScrollBar}">
-                                        <Grid Background="Transparent" SnapsToDevicePixels="True">
+                                        <Grid x:Name="ScrollSurface" Background="Transparent" SnapsToDevicePixels="True">
                                             <Border x:Name="ScrollRail" Width="8" CornerRadius="4"
                                                     HorizontalAlignment="Center" Background="{DynamicResource ScrollRailBrush}"
                                                     Opacity="0"/>
@@ -181,7 +209,7 @@
                                                 <Setter TargetName="ScrollRail" Property="Opacity" Value="1"/>
                                             </Trigger>
                                             <Trigger Property="IsEnabled" Value="False">
-                                                <Setter Property="Opacity" Value="0.5"/>
+                                                <Setter TargetName="ScrollSurface" Property="Opacity" Value="0"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -194,14 +222,23 @@
                            Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" Visibility="Collapsed"/>
             </Grid>
-            <TextBlock x:Name="StatusLabel" Grid.Row="3" TextWrapping="Wrap" MaxHeight="48"
+            <TextBlock x:Name="StatusLabel" Grid.Row="4" Grid.ColumnSpan="2" TextWrapping="Wrap" MaxHeight="48"
                        Foreground="{DynamicResource TextBrush}" Visibility="Collapsed" Margin="0,4,0,2"
                        AutomationProperties.LiveSetting="Polite"/>
-            <DockPanel Grid.Row="4" Margin="0,5,0,0">
-                <TextBlock DockPanel.Dock="Right" Foreground="{DynamicResource MutedBrush}" FontSize="11" Text="&#x2195; Resize"/>
-                <TextBlock x:Name="FooterLabel" FontSize="11" Foreground="{DynamicResource MutedBrush}"
-                           Text="&#x2191; &#x2193; Navigate  ·  Enter Paste"/>
-            </DockPanel>
+            <Grid Grid.Row="5" Grid.ColumnSpan="2" Margin="0,5,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="FooterLabel" FontSize="10" Foreground="{DynamicResource MutedBrush}"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Text="&#x2191; &#x2193; Navigate · Enter Paste"/>
+                <Button x:Name="CompactButton" Grid.Column="1" Width="46" Height="22" MinHeight="22"
+                        Background="{DynamicResource FieldBrush}" Padding="2" Margin="4,0"
+                        ToolTip="Collapse titled clips" AutomationProperties.Name="Collapse titled clips"/>
+                <TextBlock Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"
+                           Foreground="{DynamicResource MutedBrush}" FontSize="11" Text="&#x2195; Resize"/>
+            </Grid>
         </Grid>
     </Border>
 </Window>
