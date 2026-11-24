@@ -10,6 +10,9 @@ Use a disposable or explicitly authorized interactive Windows desktop. Use synth
 4. Edit a title inline, save/cancel/clear, search Persian and English title/content, verify title matches precede even pinned content-only matches and No Title does not count as an actual title, and confirm only original content is pasted.
 5. Pin clips, copy 55+ distinct items, recopy a pinned and a recent clip, verify stable pinned-first order, 50 recent items, and preserved metadata. Unpin, delete, clear recent and restart.
 6. Select each of eight colors and Default using mouse hover/click and keyboard. Verify no accidental paste or reorder, persistence on restart/recopy/pin-unpin, visible focus, no horizontal overflow, readable light/dark/high-contrast appearance, and selection feedback.
+   With an overflowing history, verify the thin rounded scrollbar expands on hover,
+   retains a usable pointer target and supports thumb dragging, page clicks,
+   wheel scrolling and keyboard navigation. Check both themes and high contrast.
 7. Drag the header and resize vertically, hide and reopen, restart, move to another monitor/DPI, and test near screen edges. Verify saved position and height, work-area clamp and recovery of preferred height on the larger monitor; reset placement from the tray. Confirm the header controls remain clickable.
 8. Copy and paste plain Unicode, formatted HTML (e.g. browser to editor), PNG/bitmap image into Paint, and compare actual content. Verify image preview, duplicate recapture behavior, clipboard contention recovery, no self-capture loop, and privacy markers (ExcludeClipboardContentFromMonitorProcessing and CanIncludeInClipboardHistory=0 ignored; CanUploadToCloudClipboard=0 preserved on paste). Test partial SetClipboardData failures: publish the privacy marker first, never send paste after failure, clear partial restoration where possible.
 

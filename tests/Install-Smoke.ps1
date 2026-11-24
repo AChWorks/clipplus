@@ -159,13 +159,13 @@ try {
     $oldUninstallHash = (Get-FileHash -LiteralPath $oldUninstaller -Algorithm SHA256).Hash
     $oldAppMarker = Join-Path $context.Install 'previous-package-smoke.txt'
     Set-Content -LiteralPath $oldAppMarker -Value 'only in previous package'
-    $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\\'
+    $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
     foreach ($fault in @('after-activation','cancel-install')) {
         Invoke-FailedWizard $fault
         $restoredUninstaller = Read-Registration
         if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $oldExe -or
             (Get-FileHash -LiteralPath $restoredUninstaller -Algorithm SHA256).Hash -ne $oldUninstallHash -or
-            (Export-ScheduledTask -TaskName $context.Task -TaskPath '\\') -ne $oldTaskXml -or
+            (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
             (Get-OwnedTask $context).State -ne 'Running' -or
             -not (Test-Path -LiteralPath $oldAppMarker) -or
             (Test-Path -LiteralPath $context.Transaction) -or

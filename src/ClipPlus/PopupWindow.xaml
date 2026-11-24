@@ -118,7 +118,78 @@
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          ScrollViewer.CanContentScroll="False"
-                         AutomationProperties.Name="Clipboard history" />
+                         AutomationProperties.Name="Clipboard history">
+                    <ListBox.Resources>
+                        <!-- Keep the native WPF ScrollBar/Track/Thumb behavior.
+                             Windows 11-style indicator: thin at rest, wider on hover,
+                             with a comfortable invisible pointer target. -->
+                        <Style TargetType="{x:Type ScrollBar}">
+                            <Setter Property="Width" Value="12"/>
+                            <Setter Property="MinWidth" Value="12"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="{x:Type ScrollBar}">
+                                        <Grid Background="Transparent" SnapsToDevicePixels="True">
+                                            <Border x:Name="ScrollRail" Width="8" CornerRadius="4"
+                                                    HorizontalAlignment="Center" Background="{DynamicResource ScrollRailBrush}"
+                                                    Opacity="0"/>
+                                            <Track x:Name="PART_Track" IsDirectionReversed="True" Orientation="{TemplateBinding Orientation}">
+                                                <Track.DecreaseRepeatButton>
+                                                    <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}" Focusable="False" Background="Transparent">
+                                                        <RepeatButton.Template>
+                                                            <ControlTemplate TargetType="{x:Type RepeatButton}">
+                                                                <Border Background="Transparent"/>
+                                                            </ControlTemplate>
+                                                        </RepeatButton.Template>
+                                                    </RepeatButton>
+                                                </Track.DecreaseRepeatButton>
+                                                <Track.Thumb>
+                                                    <Thumb MinHeight="22" Focusable="False">
+                                                        <Thumb.Template>
+                                                            <ControlTemplate TargetType="{x:Type Thumb}">
+                                                                <Grid Background="Transparent">
+                                                                    <Border x:Name="ScrollIndicator" Width="{DynamicResource ScrollIndicatorWidth}" CornerRadius="3"
+                                                                            HorizontalAlignment="Center" Background="{DynamicResource ScrollThumbBrush}"/>
+                                                                </Grid>
+                                                                <ControlTemplate.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="True">
+                                                                        <Setter TargetName="ScrollIndicator" Property="Width" Value="{DynamicResource ScrollIndicatorActiveWidth}"/>
+                                                                    </DataTrigger>
+                                                                    <Trigger Property="IsDragging" Value="True">
+                                                                        <Setter TargetName="ScrollIndicator" Property="Width" Value="{DynamicResource ScrollIndicatorActiveWidth}"/>
+                                                                        <Setter TargetName="ScrollIndicator" Property="Background" Value="{DynamicResource ScrollActiveBrush}"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Thumb.Template>
+                                                    </Thumb>
+                                                </Track.Thumb>
+                                                <Track.IncreaseRepeatButton>
+                                                    <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}" Focusable="False" Background="Transparent">
+                                                        <RepeatButton.Template>
+                                                            <ControlTemplate TargetType="{x:Type RepeatButton}">
+                                                                <Border Background="Transparent"/>
+                                                            </ControlTemplate>
+                                                        </RepeatButton.Template>
+                                                    </RepeatButton>
+                                                </Track.IncreaseRepeatButton>
+                                            </Track>
+                                        </Grid>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="ScrollRail" Property="Opacity" Value="1"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Opacity" Value="0.5"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.Resources>
+                </ListBox>
                 <TextBlock x:Name="EmptyLabel" Text="Nothing copied yet." TextWrapping="Wrap"
                            Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" Visibility="Collapsed"/>

@@ -177,6 +177,27 @@ internal static class Program
                     $"{color} accent is visibly distinct");
             }
             Check(visibleColors.Count == 8, "All eight visible palette accents are distinct");
+            for (var i = 0; i < 30; i++)
+                store.Capture(ClipPayload.FromText("scrollbar fixture " + i));
+            search.Text = "scrollbar fixture";
+            popup.UpdateLayout();
+            var viewer = Descendants<ScrollViewer>(list).First();
+            var bar = Descendants<System.Windows.Controls.Primitives.ScrollBar>(viewer)
+                .Single(b => b.Orientation == Orientation.Vertical && b.IsVisible);
+            var indicator = Descendants<Border>(bar).Single(b => b.Name == "ScrollIndicator");
+            var expectedIndicatorWidth = SystemParameters.HighContrast ? 8 : bar.IsMouseOver ? 6 : 3;
+            Check(Math.Abs(bar.ActualWidth - 12) <= 0.5 &&
+                  Math.Abs(indicator.ActualWidth - expectedIndicatorWidth) <= 0.5,
+                "Windows-style scrollbar has narrow indicator and 12-DIP interaction area");
+            Check(viewer.ScrollableHeight > 0 && bar.Maximum > 0, "native scroll range remains usable");
+            viewer.ScrollToBottom();
+            popup.UpdateLayout();
+            Check(viewer.VerticalOffset > 0 && Math.Abs(bar.Value - viewer.VerticalOffset) < 1,
+                "native ScrollViewer and scrollbar value stay synchronized");
+            viewer.ScrollToTop();
+            popup.UpdateLayout();
+            Check(viewer.VerticalOffset == 0, "scrolling back to top remains functional");
+
             var notices = ThirdPartyNotices.Read();
             Check(notices.Contains("Microsoft.Data.Sqlite.Core 10.0.15") &&
                   notices.Contains("SQLitePCLRaw.core 2.1.13") &&

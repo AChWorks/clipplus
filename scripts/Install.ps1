@@ -93,7 +93,7 @@ function Write-TransactionState($Context, $State) {
     $file = Join-Path $Context.Transaction 'state.json'
     $temporary = "$file.tmp"
     [IO.File]::WriteAllText($temporary, ($State | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
-    if (Test-Path -LiteralPath $file) { [IO.File]::Replace($temporary, $file, $null) }
+    if (Test-Path -LiteralPath $file) { [IO.File]::Replace($temporary, $file, [NullString]::Value) }
     else { [IO.File]::Move($temporary, $file) }
 }
 

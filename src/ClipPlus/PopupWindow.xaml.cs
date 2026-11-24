@@ -678,6 +678,11 @@ public partial class PopupWindow : Window
             Resources["MutedBrush"] = SystemColors.WindowTextBrush;
             Resources["BorderBrush"] = SystemColors.WindowTextBrush;
             Resources["FocusBrush"] = SystemColors.HighlightBrush;
+            Resources["ScrollThumbBrush"] = SystemColors.WindowTextBrush;
+            Resources["ScrollActiveBrush"] = SystemColors.HighlightBrush;
+            Resources["ScrollRailBrush"] = SystemColors.ControlBrush;
+            Resources["ScrollIndicatorWidth"] = 8.0;
+            Resources["ScrollIndicatorActiveWidth"] = 8.0;
             return;
         }
         Set("PanelBrush", "#F5F5F5", "#202020");
@@ -689,5 +694,10 @@ public partial class PopupWindow : Window
         Set("MutedBrush", "#595959", "#BBBBBB");
         Set("BorderBrush", "#D3D3D3", "#414141");
         Set("FocusBrush", "#2562A8", "#9BC9FF");
+        Set("ScrollThumbBrush", "#757575", "#959595");
+        Set("ScrollActiveBrush", "#505050", "#C6C6C6");
+        Set("ScrollRailBrush", "#E1E1E1", "#393939");
+        Resources["ScrollIndicatorWidth"] = 3.0;
+        Resources["ScrollIndicatorActiveWidth"] = 6.0;
     }
 }
