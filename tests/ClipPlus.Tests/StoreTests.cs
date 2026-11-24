@@ -116,6 +116,29 @@ public sealed class StoreTests
     }
 
     [Fact]
+    public void SearchPrioritizesRealTitlesAcrossPinnedAndRecentClips()
+    {
+        using var store = new ClipStore(":memory:");
+        var titleRecent = store.Capture(ClipPayload.FromText("command one"));
+        store.SetTitle(titleRecent, "My Server");
+        var titlePin = store.Capture(ClipPayload.FromText("command two"));
+        store.SetTitle(titlePin, "SERVER SSH");
+        store.SetPinned(titlePin, true);
+        var contentPin = store.Capture(ClipPayload.FromText("server content pinned"));
+        store.SetPinned(contentPin, true);
+        var contentRecent = store.Capture(ClipPayload.FromText("server content recent"));
+        Assert.Equal(new[] { contentPin, titlePin, contentRecent, titleRecent }, store.List().Select(item => item.Id));
+        Assert.Equal(new[] { titlePin, titleRecent, contentPin, contentRecent }, store.List("sErVeR").Select(item => item.Id));
+        Assert.Equal(new[] { titlePin, titleRecent, contentPin, contentRecent }, store.List("s").Select(item => item.Id));
+        Assert.Empty(store.List("No Title"));
+        store.SetTitle(titleRecent, "");
+        Assert.Equal(new[] { titlePin, contentPin, contentRecent }, store.List("SERVER").Select(item => item.Id));
+        Assert.Equal("No Title", store.List().Single(item => item.Id == titleRecent).DisplayTitle);
+        store.SetTitle(titleRecent, "سرور");
+        Assert.Equal(titleRecent, Assert.Single(store.List("سر")).Id);
+    }
+
+    [Fact]
     public void DatabaseAndPreferencesSurviveRestart()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -140,7 +163,7 @@ public sealed class StoreTests
                 Assert.Equal(ClipColor.Pink, item.Color);
             }
             var file = Path.Combine(directory, "settings.json");
-            var preferences = new Preferences { WindowHeight = 734, Shortcut = Shortcut.CtrlAltV };
+            var preferences = new Preferences { WindowHeight = 734, WindowPosition = new WindowPosition(-1500, 240), Shortcut = Shortcut.CtrlAltV };
             preferences.Save(file);
             Assert.Equal(preferences, Preferences.Load(file));
         }

@@ -22,6 +22,7 @@ public partial class App : Application
     private ClipStore? _store;
     private PopupWindow? _popup;
     private Forms.NotifyIcon? _tray;
+    private System.Drawing.Icon? _trayIcon;
     private Forms.ToolStripMenuItem? _shortcutMenu;
     private DispatcherTimer? _retry;
     private uint? _capturedSequence;
@@ -54,7 +55,7 @@ public partial class App : Application
             _messages.AddHook(WindowMessage);
             _clipboard = new WindowsClipboard(_messages.Handle);
             _shortcut = new ShortcutManager(_messages.Handle);
-            _popup = new PopupWindow(_store, PasteAsync, SaveHeight, Report, () => _preferences.WindowHeight);
+            _popup = new PopupWindow(_store, PasteAsync, SaveGeometry, Report, () => _preferences);
             _popup.Closed += (_, _) => { if (!_exiting) Shutdown(); };
             MainWindow = _popup;
             CreateTray();
@@ -92,14 +93,23 @@ public partial class App : Application
         open.Click += (_, _) => Dispatcher.BeginInvoke(() => OpenPopup(false));
         _shortcutMenu = new Forms.ToolStripMenuItem("Shortcut");
         menu.Items.Add(_shortcutMenu);
+        menu.Items.Add("Reset popup position", null, (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _preferences = _preferences with { WindowPosition = null };
+            SavePreferences();
+        })));
         menu.Items.Add(new Forms.ToolStripSeparator());
         var elevated = StateDirectory.Elevated;
         menu.Items.Add(new Forms.ToolStripMenuItem(elevated ? "Running as Administrator" : "Running normally") { Enabled = false });
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Dispatcher.BeginInvoke(new Action(() => Shutdown())));
+        // The same embedded icon is used by the EXE, the WPF window and tray.
+        using (var iconStream = GetResourceStream(new Uri("pack://application:,,,/Assets/ClipPlus.ico")).Stream)
+        using (var icon = new System.Drawing.Icon(iconStream))
+            _trayIcon = (System.Drawing.Icon)icon.Clone();
         _tray = new Forms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = _trayIcon,
             Text = "ClipPlus",
             ContextMenuStrip = menu,
             Visible = true
@@ -295,10 +305,15 @@ public partial class App : Application
         finally { _pasting = false; }
     }
 
-    private void SaveHeight(double height)
+    private void SaveGeometry(double? height, WindowPosition? position)
     {
-        if (Math.Abs(_preferences.WindowHeight - height) < 0.5) return;
-        _preferences = _preferences with { WindowHeight = height };
+        var next = _preferences with
+        {
+            WindowHeight = height ?? _preferences.WindowHeight,
+            WindowPosition = position ?? _preferences.WindowPosition
+        };
+        if (next == _preferences) return;
+        _preferences = next;
         SavePreferences();
     }
 
@@ -346,6 +361,7 @@ public partial class App : Application
             _messages.Dispose();
         }
         _tray?.Dispose();
+        _trayIcon?.Dispose();
         _store?.Dispose();
         if (_ready)
         {

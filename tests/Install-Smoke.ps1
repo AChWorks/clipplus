@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Package)
+param([Parameter(Mandatory)][string]$Package,[switch]$StartupOnly)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -24,15 +24,22 @@ try {
     }
     & (Join-Path $directory 'Install.ps1')
     $installed = $true
+    if ($StartupOnly) {
+        Write-Host 'PASS: alternate distribution started as Administrator.'
+        return
+    }
     $testProject = Join-Path $PSScriptRoot 'ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj'
     $database = Join-Path $context.Data 'history.db'
     dotnet run --project $testProject -c Release --no-build -- --isolated-desktop --installed-flow --shortcut WinV --database $database
     if ($LASTEXITCODE -ne 0) { throw "Installed interactive workflow failed ($LASTEXITCODE)." }
     $readyPath = Join-Path $context.Data 'ready.json'
     $firstReady = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
+    $settings = Join-Path $context.Data 'settings.json'
+    $savedPosition = (Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json).WindowPosition
+    if ($null -eq $savedPosition) { throw 'The dragged popup position was not persisted.' }
     $sentinel = Join-Path $context.Data 'smoke-state-sentinel.txt'
     Set-Content -LiteralPath $sentinel -Value 'synthetic state preservation'
-    $file = Join-Path $directory 'app\ClipPlus.dll'
+    $file = Join-Path $directory 'app\ClipPlus.exe'
     $original = [IO.File]::ReadAllBytes($file)
     $rejected = $false
     try {
@@ -51,7 +58,11 @@ try {
     Write-Host 'PASS: invalid package rejected before activation.'
     & (Join-Path $directory 'Install.ps1')
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Update removed durable state.' }
-    Write-Host 'PASS: reinstallation preserved state.'
+    $afterUpdate = (Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json).WindowPosition
+    if ($afterUpdate.X -ne $savedPosition.X -or $afterUpdate.Y -ne $savedPosition.Y) { throw 'Update changed the saved popup position.' }
+    Write-Host 'PASS: reinstallation preserved state and popup position.'
+    dotnet run --project $testProject -c Release --no-build -- --isolated-desktop --installed-flow --shortcut WinV --database $database --verify-saved-geometry
+    if ($LASTEXITCODE -ne 0) { throw "Restart geometry verification failed ($LASTEXITCODE)." }
     & (Join-Path $directory 'Uninstall.ps1')
     $installed = $false
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Uninstall removed durable state.' }

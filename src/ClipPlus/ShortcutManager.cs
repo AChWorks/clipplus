@@ -6,9 +6,9 @@ using ClipPlus.Core;
 
 namespace ClipPlus;
 
-// Win+V is reserved by Windows and RegisterHotKey can reject it. Use a
-// narrowly scoped, documented low-level hook only for that exact chord.
-// No key history, text collection or modifier suppression. Ignore lower-integrity injected events; same-integrity accessibility/automation input is supported.
+// Windows reserves Win+V. Use one narrow hook for that exact chord on all
+// supported desktops, without suppressing the Win modifier itself.
+// No key history or text collection. Ignore lower-integrity injected input.
 internal sealed class ShortcutManager(nint window) : IDisposable
 {
     private bool _registered;
@@ -29,13 +29,13 @@ internal sealed class ShortcutManager(nint window) : IDisposable
             Shortcut.CtrlAltV => 0x0003u,
             _ => throw new ArgumentOutOfRangeException(nameof(shortcut))
         };
-        if (Native.RegisterHotKey(window, 1, modifiers | 0x4000, Native.VkV))
+        if (shortcut != Shortcut.WinV)
         {
+            if (!Native.RegisterHotKey(window, 1, modifiers | 0x4000, Native.VkV))
+                throw Native.Error("RegisterHotKey (shortcut is unavailable)");
             _registered = true;
             return;
         }
-        if (shortcut != Shortcut.WinV)
-            throw Native.Error("RegisterHotKey (shortcut is unavailable)");
 
         // A dedicated message pump keeps the callback responsive even when
         // the UI thread is saving history or decoding a preview.
@@ -88,8 +88,10 @@ internal sealed class ShortcutManager(nint window) : IDisposable
                     if ((Native.Down(Native.VkLWin) || Native.Down(Native.VkRWin)) &&
                         !Native.Down(Native.VkAlt) && !Native.Down(Native.VkControl) && !Native.Down(Native.VkShift))
                     {
-                        // Fail open if posting fails; never swallow unrelated input.
-                        if (Native.PostMessage(window, Native.WmOpenPopup, 0, 0))
+                        // Mark the consumed chord before the real Win key is
+                        // released. Fail open if marking or posting fails.
+                        if (Native.MarkWinChord() &&
+                            Native.PostMessage(window, Native.WmOpenPopup, 0, 0))
                         {
                             _swallowV = true;
                             return 1;

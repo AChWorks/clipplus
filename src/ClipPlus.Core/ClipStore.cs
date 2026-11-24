@@ -11,6 +11,7 @@ public sealed class ClipStore : IDisposable
 
     public ClipStore(string path)
     {
+        SqlitePlatform.Initialize();
         if (path != ":memory:")
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         _db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
@@ -73,9 +74,12 @@ public sealed class ClipStore : IDisposable
         {
             using var insert = Command("""
                 INSERT INTO clips(fingerprint,touched,text,has_image,has_html)
-                VALUES ($hash,(SELECT COALESCE(MAX(touched),0)+1 FROM clips),$text,$image,$html) RETURNING id
+                VALUES ($hash,(SELECT COALESCE(MAX(touched),0)+1 FROM clips),$text,$image,$html)
                 """, tx, ("$hash", fingerprint), ("$text", payload.Text), ("$image", payload.HasImage), ("$html", payload.HasHtml));
-            id = (long)insert.ExecuteScalar()!;
+            // Older Windows system SQLite builds predate INSERT RETURNING.
+            insert.ExecuteNonQuery();
+            using var insertedId = Command("SELECT last_insert_rowid()", tx);
+            id = (long)insertedId.ExecuteScalar()!;
             foreach (var (format, bytes) in payload.Formats)
             {
                 using var add = Command("INSERT INTO formats(clip_id,format,data) VALUES($id,$format,$data)",
@@ -109,13 +113,16 @@ public sealed class ClipStore : IDisposable
                 (ClipColor)reader.GetInt32(2), reader.GetBoolean(3),
                 reader.GetString(4), reader.GetBoolean(5), reader.GetBoolean(6));
             if (string.IsNullOrWhiteSpace(query) ||
-                item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                item.TitleMatches(query) ||
                 item.Text.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 (item.HasImage && "Image".Contains(query, StringComparison.OrdinalIgnoreCase)) ||
                 (item.HasHtml && "HTML content".Contains(query, StringComparison.OrdinalIgnoreCase)))
                 items.Add(item);
         }
-        return items;
+        // Stable ordering retains pinned-first and recency within each tier.
+        // An untitled clip has no title match, regardless of its placeholder.
+        return string.IsNullOrWhiteSpace(query) ? items :
+            items.OrderByDescending(item => item.TitleMatches(query)).ToList();
     }
 
     public ClipPayload? Read(long id)

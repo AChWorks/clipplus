@@ -94,9 +94,9 @@ internal static class Program
             store.SetPinned(id, true);
             store.SetColor(id, ClipColor.Blue);
             store.SetTitle(id, "Test title");
-            var popup = new PopupWindow(store, _ => Task.CompletedTask, _ => { },
+            var popup = new PopupWindow(store, _ => Task.CompletedTask, (_, _) => { },
                 (message, error) => { if (error is not null) throw new InvalidOperationException(message, error); },
-                () => 520);
+                () => new Preferences());
             popup.ShowAt(Native.Anchor(Native.GetForegroundWindow()));
             popup.UpdateLayout();
             var list = (System.Windows.Controls.ListBox)popup.FindName("ClipList");
@@ -106,6 +106,15 @@ internal static class Program
             Check(list.Items.Count == 0, "WPF search filters rows");
             search.Text = "Test title";
             Check(list.Items.Count == 1, "WPF title search");
+            var titleMatch = store.Capture(ClipPayload.FromText("second synthetic item"));
+            store.SetTitle(titleMatch, "Search priority");
+            var contentMatch = store.Capture(ClipPayload.FromText("Search priority in content"));
+            store.SetPinned(contentMatch, true);
+            search.Text = "Search priority";
+            Check(list.Items.Count == 2 && ((System.Windows.Controls.ListBoxItem)list.Items[0]).Tag is long ranked && ranked == titleMatch,
+                "WPF title match precedes pinned content match");
+            search.Text = "No Title";
+            Check(list.Items.Count == 0, "WPF untitled placeholder is not searchable");
             popup.HidePopup();
             popup.Close();
             Console.WriteLine("Windows smoke checks completed; physical hotkey, interactive paste, elevation, resize and lifecycle still require desktop acceptance.");

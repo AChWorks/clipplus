@@ -81,6 +81,8 @@ public sealed class ClipPayload
 public sealed record ClipItem(long Id, string Title, ClipColor Color, bool Pinned,
     string Text, bool HasImage, bool HasHtml)
 {
+    public bool TitleMatches(string query) => !string.IsNullOrWhiteSpace(query) &&
+        Title.Length > 0 && Title.Contains(query, StringComparison.OrdinalIgnoreCase);
     public string DisplayTitle => string.IsNullOrEmpty(Title) ? "No Title" : Title;
     public string Preview => !string.IsNullOrEmpty(Text) ? Text :
         HasImage ? "Image" : HasHtml ? "HTML content" : "Empty text";

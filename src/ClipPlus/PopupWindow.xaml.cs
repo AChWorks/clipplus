@@ -21,17 +21,18 @@ public partial class PopupWindow : Window
 {
     private readonly ClipStore _store;
     private readonly Func<long, Task> _paste;
-    private readonly Action<double> _saveHeight;
+    private readonly Action<double?, WindowPosition?> _saveGeometry;
     private readonly Action<string, Exception?> _report;
-    private readonly Func<double> _preferredHeight;
+    private readonly Func<Preferences> _preferences;
     private readonly Dictionary<long, Row> _rows = new();
     private readonly DispatcherTimer _paletteTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private Row? _openPalette;
     private Row? _editingRow;
     private TextBox? _titleEditor;
-    private bool _placing, _refreshing, _refreshPending, _userSizing, _dark;
-    private double _sizeStart;
+    private bool _placing, _refreshing, _refreshPending, _dark;
+    private bool _inMoveSize, _userMoving, _userSizing;
+    private Native.Rect _moveStart;
 
     private sealed class Row(ClipItem item, ListBoxItem container, Button title, Grid titleHost,
         Border accent, Button swatch, Ellipse swatchDot, Border palette, UniformGrid choices, Image image)
@@ -49,17 +50,27 @@ public partial class PopupWindow : Window
         internal bool PreviewAttempted;
     }
 
-    internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<double> saveHeight,
-        Action<string, Exception?> report, Func<double> preferredHeight)
+    internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<double?, WindowPosition?> saveGeometry,
+        Action<string, Exception?> report, Func<Preferences> preferences)
     {
         _store = store;
         _paste = paste;
-        _saveHeight = saveHeight;
+        _saveGeometry = saveGeometry;
         _report = report;
-        _preferredHeight = preferredHeight;
+        _preferences = preferences;
         InitializeComponent();
         ApplyTheme();
 
+        DragHeader.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.ChangedButton != MouseButton.Left || e.ButtonState != MouseButtonState.Pressed) return;
+            e.Handled = true;
+            Run(() =>
+            {
+                DragMove();
+                if (IsVisible) FocusSearch();
+            });
+        };
         CloseButton.Click += (_, _) => HidePopup();
         ClearButton.Click += (_, _) => Run(() =>
         {
@@ -92,13 +103,24 @@ public partial class PopupWindow : Window
     {
         if (message == 0x0231) // WM_ENTERSIZEMOVE
         {
-            _userSizing = true;
-            _sizeStart = ActualHeight;
+            _inMoveSize = !_placing && Native.GetWindowRect(hwnd, out _moveStart);
+            _userMoving = _userSizing = false;
         }
-        else if (message == 0x0232 && _userSizing) // WM_EXITSIZEMOVE
+        else if (_inMoveSize && message == 0x0216) // WM_MOVING
+            _userMoving = true;
+        else if (_inMoveSize && message == 0x0214) // WM_SIZING
+            _userSizing = true;
+        else if (message == 0x0232 && _inMoveSize) // WM_EXITSIZEMOVE
         {
-            _userSizing = false;
-            if (Math.Abs(ActualHeight - _sizeStart) > 0.5) _saveHeight(ActualHeight);
+            _inMoveSize = false;
+            if (!Native.GetWindowRect(hwnd, out var rect)) return 0;
+            var moved = rect.Left != _moveStart.Left || rect.Top != _moveStart.Top;
+            WindowPosition? position = moved && (_userMoving || _userSizing)
+                ? new WindowPosition(rect.Left, rect.Top) : null;
+            var resized = _userSizing && rect.Bottom - rect.Top != _moveStart.Bottom - _moveStart.Top;
+            double? height = resized
+                ? (rect.Bottom - rect.Top) / VisualTreeHelper.GetDpi(this).DpiScaleY : null;
+            if (position is not null || height is not null) _saveGeometry(height, position);
         }
         return 0;
     }
@@ -116,6 +138,10 @@ public partial class PopupWindow : Window
             _statusTimer.Stop();
             StatusLabel.Visibility = Visibility.Collapsed;
 
+            var preferences = _preferences();
+            var position = preferences.WindowPosition;
+            if (position is not null)
+                anchor = new Native.Point { X = position.X, Y = position.Y };
             var monitor = Native.MonitorFromPoint(anchor, 2);
             var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
             if (monitor == 0 || !Native.GetMonitorInfo(monitor, ref info))
@@ -133,12 +159,13 @@ public partial class PopupWindow : Window
             MinHeight = 0;
             MaxHeight = available;
             MinHeight = Math.Min(240, available);
-            Height = Math.Clamp(_preferredHeight(), MinHeight, MaxHeight);
+            Height = Math.Clamp(preferences.WindowHeight, MinHeight, MaxHeight);
 
             var pxWidth = Math.Min(work.Right - work.Left, (int)Math.Round(Width * scale));
             var pxHeight = Math.Min(work.Bottom - work.Top, (int)Math.Round(Height * scale));
             var x = Math.Clamp(anchor.X, work.Left, work.Right - pxWidth);
-            var y = anchor.Y + pxHeight <= work.Bottom ? anchor.Y : anchor.Y - pxHeight;
+            var y = position is not null || (long)anchor.Y + pxHeight <= work.Bottom
+                ? anchor.Y : anchor.Y - pxHeight;
             y = Math.Clamp(y, work.Top, work.Bottom - pxHeight);
             var hwnd = new WindowInteropHelper(this).EnsureHandle();
             Native.SetWindowPos(hwnd, 0, x, y, pxWidth, pxHeight, 0x0014); // NOZORDER | NOACTIVATE
@@ -208,11 +235,15 @@ public partial class PopupWindow : Window
             ClosePalette(false);
             ClipList.Items.Clear();
             _rows.Clear();
-            bool? previousGroup = null;
+            string? previousGroup = null;
+            var searching = !string.IsNullOrWhiteSpace(SearchBox.Text);
             foreach (var item in items)
             {
-                var row = BuildRow(item, previousGroup != item.Pinned);
-                previousGroup = item.Pinned;
+                var group = searching
+                    ? (item.TitleMatches(SearchBox.Text) ? "Title matches" : "Content matches")
+                    : (item.Pinned ? "Pinned" : "Recent");
+                var row = BuildRow(item, previousGroup != group ? group : null);
+                previousGroup = group;
                 _rows.Add(item.Id, row);
                 ClipList.Items.Add(row.Container);
             }
@@ -228,14 +259,14 @@ public partial class PopupWindow : Window
         PreviewSelected();
     }
 
-    private Row BuildRow(ClipItem item, bool startsGroup)
+    private Row BuildRow(ClipItem item, string? groupHeading)
     {
         var outer = new StackPanel();
-        if (startsGroup)
+        if (groupHeading is not null)
         {
             var heading = new TextBlock
             {
-                Text = item.Pinned ? "Pinned" : "Recent", FontSize = 11,
+                Text = groupHeading, FontSize = 11,
                 Margin = new Thickness(3, 2, 0, 5), FontWeight = FontWeights.SemiBold
             };
             heading.SetResourceReference(ForegroundProperty, "MutedBrush");
@@ -245,7 +276,7 @@ public partial class PopupWindow : Window
         card.Style = (Style)FindResource("ClipCard");
         outer.Children.Add(card);
         var panel = new Grid();
-        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
         panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         card.Child = panel;
         var accent = new Border { CornerRadius = new CornerRadius(5, 0, 0, 5) };
@@ -266,7 +297,7 @@ public partial class PopupWindow : Window
             FontWeight = FontWeights.SemiBold, FontSize = 12, ToolTip = "Click to edit title"
         };
         titleHost.Children.Add(title);
-        var swatchDot = new Ellipse { Width = 13, Height = 13, StrokeThickness = 1 };
+        var swatchDot = new Ellipse { Width = 15, Height = 15, StrokeThickness = 1 };
         swatchDot.SetResourceReference(Shape.StrokeProperty, "MutedBrush");
         var swatch = IconButton(swatchDot, "Choose clip color");
         Grid.SetColumn(swatch, 1);
@@ -459,8 +490,7 @@ public partial class PopupWindow : Window
                 {
                     Text = "\u2713", FontWeight = FontWeights.Bold, FontSize = 13,
                     HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-                    Foreground = color == ClipColor.Default && !_dark ? Brushes.White :
-                        color == ClipColor.Default ? Brushes.Black : (_dark ? Brushes.Black : Brushes.White)
+                    Foreground = ContrastForeground(((SolidColorBrush)ellipse.Fill).Color)
                 };
                 dot.Children.Add(check);
             }
@@ -561,17 +591,28 @@ public partial class PopupWindow : Window
     {
         var hex = color switch
         {
-            ClipColor.Red => _dark ? "#F18188" : "#BC3947",
-            ClipColor.Orange => _dark ? "#F1AC64" : "#A85412",
-            ClipColor.Yellow => _dark ? "#F1D66D" : "#8A6507",
-            ClipColor.Green => _dark ? "#76CB97" : "#237346",
-            ClipColor.Cyan => _dark ? "#6CCCD5" : "#147681",
-            ClipColor.Blue => _dark ? "#82B5F5" : "#255FAE",
-            ClipColor.Purple => _dark ? "#C0A0F3" : "#7451B2",
-            ClipColor.Pink => _dark ? "#EE9AC7" : "#A33B77",
+            ClipColor.Red => _dark ? "#F44336" : "#D32F2F",
+            ClipColor.Orange => _dark ? "#FF9800" : "#C45B00",
+            ClipColor.Yellow => _dark ? "#FFDD00" : "#A67800",
+            ClipColor.Green => _dark ? "#22C55E" : "#16803C",
+            ClipColor.Cyan => _dark ? "#00BCD4" : "#007F96",
+            ClipColor.Blue => _dark ? "#367CFF" : "#235BDE",
+            ClipColor.Purple => _dark ? "#A855F7" : "#8034D1",
+            ClipColor.Pink => _dark ? "#EC4899" : "#CB2579",
             _ => _dark ? "#A0A0A0" : "#666666"
         };
         return BrushFrom(hex);
+    }
+
+    private static Brush ContrastForeground(Color color)
+    {
+        static double Linear(byte channel)
+        {
+            var value = channel / 255.0;
+            return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+        }
+        var luminance = 0.2126 * Linear(color.R) + 0.7152 * Linear(color.G) + 0.0722 * Linear(color.B);
+        return luminance > 0.179 ? Brushes.Black : Brushes.White;
     }
 
     private static SolidColorBrush BrushFrom(string hex)

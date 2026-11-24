@@ -6,9 +6,13 @@ namespace ClipPlus.Core;
 [JsonConverter(typeof(JsonStringEnumConverter<Shortcut>))]
 public enum Shortcut { WinV, CtrlShiftV, CtrlAltV }
 
+// Native screen coordinates, including negative positions on left/top monitors.
+public sealed record WindowPosition(int X, int Y);
+
 public sealed record Preferences
 {
     public double WindowHeight { get; init; } = 520;
+    public WindowPosition? WindowPosition { get; init; }
     public Shortcut Shortcut { get; init; } = Shortcut.WinV;
 
     public static Preferences Load(string path)

@@ -35,6 +35,56 @@ function Test-Package([string]$Directory, $Manifest) {
     if (-not $expected.ContainsKey('ClipPlus.exe')) { throw 'ClipPlus.exe is missing from the package.' }
 }
 
+# The lightweight package uses the machine-wide Desktop Runtime. Detect it
+# before changing an existing installation. Never use a user-supplied
+# DOTNET_ROOT or execute a runtime discovered on PATH with admin privileges.
+function Assert-DesktopRuntime($Manifest) {
+    if ($Manifest.selfContained -eq $true) { return }
+    $architecture = ([string]$Manifest.rid) -replace '^win-', ''
+    if ($architecture -notin @('x64','x86','arm64') -or
+        [string]$Manifest.desktopRuntime -notmatch '^\d+\.\d+$') {
+        throw 'The package runtime metadata is invalid.'
+    }
+    $required = [version]($Manifest.desktopRuntime + '.0')
+    $roots = @()
+    foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64,[Microsoft.Win32.RegistryView]::Registry32)) {
+        $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,$view)
+        try {
+            $key = $hklm.OpenSubKey("SOFTWARE\dotnet\Setup\InstalledVersions\$architecture")
+            if ($null -ne $key) {
+                try {
+                    $location = [string]$key.GetValue('InstallLocation')
+                    if ($location) { $roots += $location }
+                } finally { $key.Dispose() }
+            }
+        } finally { $hklm.Dispose() }
+    }
+    # Also cover the official default global roots if no registry entry is
+    # present. On Arm64, an x64 installation can be under dotnet\x64.
+    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    $programFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    if ($architecture -eq 'x86' -and $programFilesX86) {
+        $roots += (Join-Path $programFilesX86 'dotnet')
+    } elseif ($programFiles) {
+        $roots += (Join-Path $programFiles 'dotnet')
+        if ($architecture -eq 'x64') { $roots += (Join-Path $programFiles 'dotnet\x64') }
+    }
+    function Test-Framework([string]$Root,[string]$Framework,[string]$Assembly) {
+        foreach ($directory in @(Get-ChildItem -LiteralPath (Join-Path $Root "shared\$Framework") -Directory -ErrorAction SilentlyContinue)) {
+            $installed = $null
+            if (-not [version]::TryParse($directory.Name,[ref]$installed)) { continue }
+            if ($installed.Major -ne $required.Major -or $installed.Minor -lt $required.Minor -or $installed -lt $required) { continue }
+            if (Test-Path -LiteralPath (Join-Path $directory.FullName $Assembly)) { return $true }
+        }
+        return $false
+    }
+    foreach ($root in ($roots | Select-Object -Unique)) {
+        if ((Test-Framework $root 'Microsoft.WindowsDesktop.App' 'PresentationFramework.dll') -and
+            (Test-Framework $root 'Microsoft.NETCore.App' 'coreclr.dll')) { return }
+    }
+    throw "Microsoft .NET Desktop Runtime $($Manifest.desktopRuntime) ($architecture) is required for the lightweight package. Install it machine-wide from https://dotnet.microsoft.com/download/dotnet/$($Manifest.desktopRuntime) or use the self-contained package. Existing ClipPlus installation was not changed."
+}
+
 $context = Get-ClipPlusContext
 $mutex = Enter-SetupLock $context
 $stage = $null
@@ -48,6 +98,7 @@ try {
     $payload = (Get-Item -LiteralPath (Join-Path $PSScriptRoot 'app')).FullName
     $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw | ConvertFrom-Json
     Test-Package $payload $manifest
+    Assert-DesktopRuntime $manifest
     Initialize-InstallRoot $context.Root
     if (Test-Path -LiteralPath $context.Install) { Assert-OwnedInstall $context $context.Install }
     $previousTask = Get-OwnedTask $context
