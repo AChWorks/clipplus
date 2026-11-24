@@ -25,7 +25,8 @@ internal static partial class Program
         Button FindButton(DependencyObject root, string name)
         {
             popup.UpdateLayout();
-            return Descendants<Button>(root).Single(b => AutomationProperties.GetName(b) == name && b.IsVisible);
+            return Descendants<Button>(root).SingleOrDefault(b => AutomationProperties.GetName(b) == name && b.IsVisible)
+                ?? throw new InvalidOperationException($"Visible category control not found: {name}; focus={Keyboard.FocusedElement?.GetType().Name}");
         }
         TextBox NameEditor()
         {
@@ -183,8 +184,9 @@ internal static partial class Program
 
         Click(FindButton(tabs, "Work"));
         workTab = FindButton(tabs, "Work");
-        workTab.Focus();
+        Check(workTab.Focus() && workTab.IsKeyboardFocused, "category accepts immediate focus after reopen");
         Key(0x71);
+        Check(NameEditor().IsKeyboardFocused, "deferred opening focus does not interrupt category editing");
         var delete = FindButton(tabs, "Delete category; keep all clips");
         Click(delete);
         Check(store.Categories().Any(c => c.Id == work), "first deletion click only requests confirmation");

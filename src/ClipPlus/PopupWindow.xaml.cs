@@ -183,7 +183,10 @@ public partial class PopupWindow : Window
                 ShowStatus("Click the search field to activate ClipPlus.");
             Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
             {
-                if (IsVisible) FocusSearch();
+                // Retry only if activation has not already established
+                // keyboard focus. Never steal it from a category or editor
+                // selected immediately after opening the popup.
+                if (IsVisible && !IsKeyboardFocusWithin) FocusSearch();
             }));
         }
         finally { _placing = false; }
