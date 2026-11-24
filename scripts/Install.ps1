@@ -4,6 +4,15 @@
 param([switch]$NormalStartup)
 . (Join-Path $PSScriptRoot 'Setup.Common.ps1')
 
+function Get-PackageHash([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') }
+        finally { $sha.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
 function Test-Package([string]$Directory, $Manifest) {
     Assert-NoReparsePoint $Directory
     if ($Manifest.product -ne 'AChWorks.ClipPlus' -or [string]::IsNullOrWhiteSpace($Manifest.version)) {
@@ -28,7 +37,7 @@ function Test-Package([string]$Directory, $Manifest) {
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($Directory.Length + 1).Replace('\','/')
         if (-not $expected.ContainsKey($relative) -or
-            (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -ine $expected[$relative]) {
+            (Get-PackageHash $file.FullName) -ine $expected[$relative]) {
             throw "Package integrity check failed: $relative"
         }
     }

@@ -7,6 +7,11 @@ param(
     [string]$ExpectedSid = ''
 )
 $ErrorActionPreference = 'Stop'
+# The installer invokes Windows PowerShell 5.1 even when its parent is pwsh.
+# Do not inherit PowerShell 7 module paths (or user-writable module roots)
+# into an elevated setup process. Use the Windows PowerShell system modules.
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
+$PSModuleAutoLoadingPreference = 'All'
 $log = Join-Path $PSScriptRoot 'setup-error.txt'
 try {
     . (Join-Path $PSScriptRoot 'Setup.Common.ps1')
