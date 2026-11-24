@@ -80,11 +80,14 @@ try {
     Copy-Item -LiteralPath $exe -Destination (Join-Path $OutputDirectory 'ClipPlus.exe') -Force
     foreach ($name in @('ClipPlus.exe','ClipPlus-Setup.exe')) {
         $info = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $OutputDirectory $name))
-        if ($info.CompanyName -ne 'AChWorks' -or $info.ProductName -ne 'ClipPlus') {
-            throw "Unexpected publisher/product metadata for $name."
+        # Inno fills fixed-size version-resource strings with trailing spaces.
+        $company = ([string]$info.CompanyName).Trim()
+        $product = ([string]$info.ProductName).Trim()
+        if ($company -ne 'AChWorks' -or $product -ne 'ClipPlus') {
+            throw "Unexpected publisher/product metadata for ${name}: company='$company', product='$product'."
         }
         $signature = Get-AuthenticodeSignature -FilePath (Join-Path $OutputDirectory $name)
-        Write-Host "$name publisher metadata: $($info.CompanyName), Authenticode: $($signature.Status)"
+        Write-Host "$name publisher metadata: $company, Authenticode: $($signature.Status)"
     }
     foreach ($name in @('ClipPlus.exe','ClipPlus-Setup.exe')) {
         $file = Join-Path $OutputDirectory $name
