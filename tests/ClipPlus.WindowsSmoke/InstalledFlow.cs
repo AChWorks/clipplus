@@ -116,7 +116,20 @@ internal static class InstalledFlow
             Invoke(Find("Pin"));
             Wait(() => FindMetadata(database, text)?.Pinned == true, "pin saved");
 
+            // Exercise actual packaged-app category creation, assignment and
+            // persisted compact mode before the installer rollback snapshots.
+            SetValue(Find("Search clipboard"), "");
+            Invoke(Find("Add category"));
+            SetValue(Find("Category name"), "Synthetic work");
+            SendKeys(KeyInput(0x0D), KeyInput(0x0D, true));
+            Wait(() => Find("Synthetic work") is not null, "category created in packaged application");
             SetValue(Find("Search clipboard"), "Synthetic E2E title");
+            Invoke(Find("Assign category"));
+            Invoke(Find("Assign to Synthetic work"));
+            Wait(() => FindMetadata(database, text)?.Category == "Synthetic work", "category membership saved");
+            SetValue(Find("Search clipboard"), "");
+            Invoke(Find("Collapse titled clips"));
+            Wait(() => Preferences.Load(settings).CompactView, "compact view preference saved");
             Wait(() =>
             {
                 try { return AutomationElement.FocusedElement?.Current.Name == "Search clipboard"; }
@@ -126,6 +139,14 @@ internal static class InstalledFlow
             Wait(() => Native.GetForegroundWindow() == hwnd && editor.Text == text, "original target received original text exactly once");
             Pump(TimeSpan.FromMilliseconds(300));
             if (editor.Text != text) throw new InvalidOperationException("Paste was duplicated or altered.");
+            editor.Clear();
+            SendShortcut(shortcut);
+            Wait(() => Native.GetForegroundWindow() == popupHwnd, "compact popup reopened");
+            AssertStablePopup(popupHwnd);
+            Invoke(Find("Paste clip"));
+            Wait(() => Native.GetForegroundWindow() == hwnd && editor.Text == text, "compact paste action restored original target and payload");
+            Pump(TimeSpan.FromMilliseconds(300));
+            if (editor.Text != text) throw new InvalidOperationException("Compact paste was duplicated or altered.");
             using var identity = WindowsIdentity.GetCurrent();
             var elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
             Console.WriteLine($"PASS: installed end-to-end clipboard workflow ({shortcut}); target elevated={elevated}.");
@@ -150,8 +171,10 @@ internal static class InstalledFlow
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT c.id,c.fingerprint,c.title,c.color,c.pinned,c.text,c.has_image,c.has_html,f.format,f.data
+            SELECT c.id,c.fingerprint,c.title,c.color,c.pinned,c.text,c.has_image,c.has_html,f.format,f.data,
+                   c.category_id,k.name,k.position
             FROM clips c JOIN formats f ON f.clip_id=c.id
+            LEFT JOIN categories k ON k.id=c.category_id
             WHERE c.title='Synthetic E2E title'
             ORDER BY c.id,f.format
             """;
@@ -161,12 +184,14 @@ internal static class InstalledFlow
         while (reader.Read())
         {
             if (reader.GetInt32(3) != (int)ClipColor.Green || !reader.GetBoolean(4) ||
-                !reader.GetString(5).StartsWith("ClipPlus E2E ", StringComparison.Ordinal))
+                !reader.GetString(5).StartsWith("ClipPlus E2E ", StringComparison.Ordinal) ||
+                reader.IsDBNull(10) || reader.GetString(11) != "Synthetic work")
                 throw new InvalidOperationException("Pinned synthetic fixture metadata changed.");
             count++;
             for (var i = 0; i < 9; i++)
                 snapshot.Append(Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture)).Append('|');
-            snapshot.AppendLine(Convert.ToBase64String((byte[])reader.GetValue(9)));
+            snapshot.Append(Convert.ToBase64String((byte[])reader.GetValue(9))).Append('|');
+            snapshot.Append(reader.GetInt64(10)).Append('|').Append(reader.GetString(11)).Append('|').AppendLine(reader.GetInt64(12).ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         if (count == 0) throw new InvalidOperationException("Synthetic pinned clip and payload are missing.");
         snapshot.AppendLine(File.ReadAllText(settings));
@@ -175,7 +200,7 @@ internal static class InstalledFlow
         return 0;
     }
 
-    private sealed record Metadata(string Title, ClipColor Color, bool Pinned);
+    private sealed record Metadata(string Title, ClipColor Color, bool Pinned, string? Category);
 
     private static Metadata? FindMetadata(string path, string text)
     {
@@ -185,10 +210,10 @@ internal static class InstalledFlow
                 { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT title,color,pinned FROM clips WHERE text=$text";
+            command.CommandText = "SELECT c.title,c.color,c.pinned,k.name FROM clips c LEFT JOIN categories k ON c.category_id=k.id WHERE c.text=$text";
             command.Parameters.AddWithValue("$text", text);
             using var reader = command.ExecuteReader();
-            return reader.Read() ? new Metadata(reader.GetString(0), (ClipColor)reader.GetInt32(1), reader.GetBoolean(2)) : null;
+            return reader.Read() ? new Metadata(reader.GetString(0), (ClipColor)reader.GetInt32(1), reader.GetBoolean(2), reader.IsDBNull(3) ? null : reader.GetString(3)) : null;
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 5 or 6) { return null; }
     }

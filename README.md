@@ -1,6 +1,6 @@
 # ClipPlus
 
-A lightweight Windows clipboard history manager that keeps the familiar Win+V workflow and adds search, editable titles, pins, colors and persistent popup geometry.
+A lightweight Windows clipboard history manager that keeps the familiar Win+V workflow and adds search, editable titles, pins, colors, categories, compact view and persistent popup geometry.
 
 [Download installer](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus-Setup.exe) · [Download portable](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus.exe) · [Releases and checksums](https://github.com/AChWorks/clipplus/releases/latest)
 
@@ -23,15 +23,18 @@ Publisher metadata identifies AChWorks. The initial release is unsigned, so Wind
 | --- | --- |
 | Open or dismiss history | Win+V; Esc closes the popup |
 | Alternate shortcut | Tray > Shortcut: Ctrl+Shift+V or Ctrl+Alt+V |
-| Search | Type a title or copied text; real title matches rank first |
+| Search | Type a title or copied text; searches all views, real title matches rank first |
 | Navigate and paste | Up/Down and Enter, or select and click the clip preview |
 | Edit a title | Click the title or No Title; Enter saves, Esc cancels |
 | Organize clips | Pin, unpin, delete or choose one of eight colors or Default from the color swatch |
-| Clear history | Clear removes recent unpinned items and keeps pins |
+| Categories | Select Pinned, Recent or a custom category; + adds a category (up to ten), double-click or F2 edits it, drag or Ctrl+Left/Right reorders it |
+| Assign a category | Use + or the category name on the clip; select No category to detach it |
+| Compact view | Use the centered footer toggle to collapse titled clips; untitled clips retain their previews |
+| Clear history | Clear recent removes all unpinned items (including categorized items) and keeps pins |
 | Move or resize | Drag the header or top/bottom edge; position and height persist |
 | Restore contextual position | Tray > Reset popup position |
 
-ClipPlus keeps 50 recent unpinned clips plus all pinned clips, deduplicates equivalent copies without losing their metadata, and retains Unicode text, HTML and relevant native image formats. The popup follows the system light/dark appearance, with a slim Windows-style scrollbar for overflowing history.
+ClipPlus keeps 100 recent unpinned clips plus all pinned clips, deduplicates equivalent copies without losing their metadata, and retains Unicode text, HTML and relevant native image formats. Pinned and Recent are global views; custom categories contain both pinned and unpinned clips, with pins first. A clip can belong to one category. Deleting a category detaches its clips without deleting them. Categorization does not prevent normal history eviction: pin a clip to keep it. Category order, the selected view and compact mode persist. In compact mode, use the Paste clip button or Enter to paste a titled clip; clicking its title still edits it. The popup follows the system light/dark appearance, with a slim Windows-style scrollbar for overflowing history.
 
 ## Update, uninstall and recovery
 

@@ -24,6 +24,7 @@ public partial class PopupWindow : Window
     private readonly Action<double?, WindowPosition?> _saveGeometry;
     private readonly Action<string, Exception?> _report;
     private readonly Func<Preferences> _preferences;
+    private readonly Action<long, bool> _saveView;
     private readonly Dictionary<long, Row> _rows = new();
     private readonly DispatcherTimer _paletteTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
@@ -36,7 +37,8 @@ public partial class PopupWindow : Window
     private Native.Point? _keyboardCursor;
 
     private sealed class Row(ClipItem item, ListBoxItem container, Button title, Grid titleHost,
-        Border accent, Button swatch, Ellipse swatchDot, Border palette, UniformGrid choices, Image image)
+        Border accent, Button swatch, Ellipse swatchDot, Border palette, UniformGrid choices, Image? image,
+        Border categoryPicker, WrapPanel categoryChoices)
     {
         internal ClipItem Item = item;
         internal readonly ListBoxItem Container = container;
@@ -47,20 +49,24 @@ public partial class PopupWindow : Window
         internal readonly Ellipse SwatchDot = swatchDot;
         internal readonly Border Palette = palette;
         internal readonly UniformGrid Choices = choices;
-        internal readonly Image Image = image;
+        internal readonly Image? Image = image;
+        internal readonly Border CategoryPicker = categoryPicker;
+        internal readonly WrapPanel CategoryChoices = categoryChoices;
         internal bool PreviewAttempted;
     }
 
     internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<double?, WindowPosition?> saveGeometry,
-        Action<string, Exception?> report, Func<Preferences> preferences)
+        Action<string, Exception?> report, Func<Preferences> preferences, Action<long, bool> saveView)
     {
         _store = store;
         _paste = paste;
         _saveGeometry = saveGeometry;
         _report = report;
         _preferences = preferences;
+        _saveView = saveView;
         InitializeComponent();
         ApplyTheme();
+        InitializeCategories();
 
         DragHeader.MouseLeftButtonDown += (_, e) =>
         {
@@ -82,11 +88,15 @@ public partial class PopupWindow : Window
         SearchBox.TextChanged += (_, _) =>
         {
             SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-            if (!_placing) Run(() => Refresh(false));
+            if (!_placing) Run(() =>
+            {
+                Refresh(false);
+                if (string.IsNullOrWhiteSpace(SearchBox.Text)) RevealActiveCategory();
+            });
         };
         ClipList.SelectionChanged += (_, _) => PreviewSelected();
         PreviewKeyDown += OnKey;
-        Deactivated += (_, _) => { if (!_placing && IsVisible) HidePopup(); };
+        Deactivated += (_, _) => { if (!_placing && !_draggingCategory && IsVisible) HidePopup(); };
         _paletteTimer.Tick += (_, _) =>
         {
             _paletteTimer.Stop();
@@ -147,7 +157,11 @@ public partial class PopupWindow : Window
             _keyboardCursor = null;
             SearchBox.Text = "";
             ClosePalette(false);
+            CloseCategoryPicker(false);
+            EndCategoryEdit();
             EndTitle(false, false);
+            _activeView = _preferences().ActiveView;
+            _compact = _preferences().CompactView;
             Refresh(false);
             _statusTimer.Stop();
             StatusLabel.Visibility = Visibility.Collapsed;
@@ -160,6 +174,7 @@ public partial class PopupWindow : Window
             var hwnd = new WindowInteropHelper(this).EnsureHandle();
             PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null);
             Show();
+            RevealActiveCategory();
             PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null);
             Activate();
             if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
@@ -221,6 +236,8 @@ public partial class PopupWindow : Window
     {
         EndTitle(false, false);
         ClosePalette(false);
+        CloseCategoryPicker(false);
+        EndCategoryEdit();
         _refreshPending = false;
         if (IsVisible) Hide();
     }
@@ -234,7 +251,8 @@ public partial class PopupWindow : Window
     internal void HistoryChanged()
     {
         if (!IsVisible) return;
-        if (_editingRow is not null || _openPalette is not null) _refreshPending = true;
+        if (_editingRow is not null || _openPalette is not null || _openCategoryRow is not null ||
+            _categoryEditor is not null || _draggingCategory) _refreshPending = true;
         else Run(() => Refresh());
     }
 
@@ -259,12 +277,16 @@ public partial class PopupWindow : Window
     {
         if (_refreshing) return;
         var previous = preserveSelection ? Selected?.Item.Id : null;
-        var items = _store.List(SearchBox.Text);
         _refreshing = true;
         try
         {
             EndTitle(false, false);
             ClosePalette(false);
+            CloseCategoryPicker(false);
+            EndCategoryEdit();
+            var available = _store.AvailableViews();
+            SyncCategoryBar(available.Pinned);
+            var items = _store.List(SearchBox.Text, _activeView);
             ClipList.Items.Clear();
             _rows.Clear();
             string? previousGroup = null;
@@ -273,15 +295,16 @@ public partial class PopupWindow : Window
             {
                 var group = searching
                     ? (item.TitleMatches(SearchBox.Text) ? "Title matches" : "Content matches")
-                    : (item.Pinned ? "Pinned" : "Recent");
+                    : _activeView > 0 ? (item.Pinned ? "Pinned" : "Recent") : null;
                 var row = BuildRow(item, previousGroup != group ? group : null);
                 previousGroup = group;
                 _rows.Add(item.Id, row);
                 ClipList.Items.Add(row.Container);
             }
-            EmptyLabel.Text = SearchBox.Text.Length == 0 ? "Nothing copied yet." : "No matching clips.";
+            EmptyLabel.Text = searching ? "No matching clips." :
+                _activeView > 0 ? "No clips in this category." : "Nothing copied yet.";
             EmptyLabel.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            ClearButton.IsEnabled = _store.List().Any(item => !item.Pinned);
+            ClearButton.IsEnabled = available.Recent;
             if (previous is long id && _rows.TryGetValue(id, out var selected))
                 ClipList.SelectedItem = selected.Container;
             else if (items.Count > 0)
@@ -318,9 +341,10 @@ public partial class PopupWindow : Window
         Grid.SetColumn(content, 1);
         panel.Children.Add(content);
 
-        var header = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+        var compact = _compact && item.Title.Length > 0;
+        var header = new Grid { Margin = compact ? new Thickness(0) : new Thickness(0, 0, 0, 4) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        for (var i = 0; i < 3; i++) header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        for (var i = 0; i < (compact ? 5 : 3); i++) header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         content.Children.Add(header);
         var titleHost = new Grid();
         header.Children.Add(titleHost);
@@ -330,8 +354,7 @@ public partial class PopupWindow : Window
             FontWeight = FontWeights.SemiBold, FontSize = 12, ToolTip = "Click to edit title"
         };
         titleHost.Children.Add(title);
-        var swatchDot = new Ellipse { Width = 17, Height = 17, StrokeThickness = 1 };
-        swatchDot.SetResourceReference(Shape.StrokeProperty, "MutedBrush");
+        var swatchDot = new Ellipse { Width = 17, Height = 17 };
         var swatch = IconButton(swatchDot, "Choose clip color");
         Grid.SetColumn(swatch, 1);
         header.Children.Add(swatch);
@@ -342,6 +365,17 @@ public partial class PopupWindow : Window
         Grid.SetColumn(delete, 3);
         header.Children.Add(delete);
 
+        var categoryButton = MakeCategoryButton(item, compact);
+        if (compact)
+        {
+            var paste = IconButton(Glyph("\uE77F"), "Paste clip");
+            Grid.SetColumn(paste, 4);
+            header.Children.Add(paste);
+            paste.Click += async (_, _) => await _paste(item.Id);
+            Grid.SetColumn(categoryButton, 5);
+            header.Children.Add(categoryButton);
+        }
+
         var choices = new UniformGrid { Columns = ((ClipColor[])Enum.GetValues(typeof(ClipColor))).Length };
         var palette = new Border
         {
@@ -351,27 +385,53 @@ public partial class PopupWindow : Window
         palette.SetResourceReference(BackgroundProperty, "FieldBrush");
         content.Children.Add(palette);
 
-        var previewPanel = new DockPanel { LastChildFill = true, Margin = new Thickness(3, 0, 3, 1), Background = Brushes.Transparent };
-        var image = new Image
+        DockPanel? previewPanel = null;
+        Image? image = null;
+        if (!compact)
         {
-            Width = 76, MaxHeight = 52, Stretch = Stretch.Uniform, Margin = new Thickness(0, 0, 7, 0),
-            Visibility = Visibility.Collapsed
-        };
-        AutomationProperties.SetName(image, "Clipboard image preview");
-        DockPanel.SetDock(image, Dock.Left);
-        previewPanel.Children.Add(image);
-        var preview = new TextBlock
+            previewPanel = new DockPanel { LastChildFill = true, Margin = new Thickness(3, 0, 3, 1), Background = Brushes.Transparent };
+            image = new Image
+            {
+                Width = 76, MaxHeight = 52, Stretch = Stretch.Uniform, Margin = new Thickness(0, 0, 7, 0),
+                Visibility = Visibility.Collapsed
+            };
+            AutomationProperties.SetName(image, "Clipboard image preview");
+            DockPanel.SetDock(image, Dock.Left);
+            previewPanel.Children.Add(image);
+            var preview = new TextBlock
+            {
+                Text = item.Preview, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxHeight = 56, VerticalAlignment = VerticalAlignment.Center,
+                FlowDirection = TextDirection(item.Preview)
+            };
+            previewPanel.Children.Add(preview);
+            content.Children.Add(previewPanel);
+            content.Children.Add(categoryButton);
+        }
+        var categoryChoices = new WrapPanel();
+        var categoryPicker = new Border
         {
-            Text = item.Preview, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxHeight = 56, VerticalAlignment = VerticalAlignment.Center
+            Child = categoryChoices, Visibility = Visibility.Collapsed, CornerRadius = new CornerRadius(4),
+            Margin = new Thickness(0, 3, 0, 0), Padding = new Thickness(2)
         };
-        preview.FlowDirection = TextDirection(item.Preview);
-        previewPanel.Children.Add(preview);
-        content.Children.Add(previewPanel);
+        categoryPicker.SetResourceReference(BackgroundProperty, "FieldBrush");
+        content.Children.Add(categoryPicker);
 
         var container = new ListBoxItem { Content = outer, Tag = item.Id };
         AutomationProperties.SetName(container, $"{item.DisplayTitle}{(item.Pinned ? ", pinned" : "")}");
-        var row = new Row(item, container, title, titleHost, accent, swatch, swatchDot, palette, choices, image);
+        var row = new Row(item, container, title, titleHost, accent, swatch, swatchDot, palette, choices, image, categoryPicker, categoryChoices);
+        categoryButton.Click += (_, _) => Run(() => ToggleCategoryPicker(row));
+        void ClosePickerAfterFocusChange()
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                if (_openCategoryRow == row && !categoryButton.IsKeyboardFocusWithin &&
+                    !categoryPicker.IsKeyboardFocusWithin)
+                    Run(() => CloseCategoryPicker());
+            }));
+        }
+        categoryPicker.LostKeyboardFocus += (_, _) => ClosePickerAfterFocusChange();
+        categoryButton.LostKeyboardFocus += (_, _) => ClosePickerAfterFocusChange();
         SetTitleVisual(row);
         SetColorVisual(row);
         title.Click += (_, _) => Run(() => BeginTitle(row));
@@ -387,7 +447,7 @@ public partial class PopupWindow : Window
             Refresh();
             FocusSearch();
         });
-        swatch.MouseEnter += (_, _) => { if (_editingRow is null) OpenPalette(row); };
+        swatch.MouseEnter += (_, _) => { if (_editingRow is null && _categoryEditor is null && _openCategoryRow is null) OpenPalette(row); };
         swatch.MouseLeave += (_, _) => StartPaletteTimer();
         swatch.LostKeyboardFocus += (_, _) => StartPaletteTimer();
         palette.MouseLeave += (_, _) => StartPaletteTimer();
@@ -408,17 +468,21 @@ public partial class PopupWindow : Window
                 if (current.X == previous.X && current.Y == previous.Y) return;
                 _keyboardCursor = null;
             }
-            if (_editingRow is null && (_openPalette is null || _openPalette == row))
+            if (_editingRow is null && _categoryEditor is null &&
+                (_openCategoryRow is null || _openCategoryRow == row) && (_openPalette is null || _openPalette == row))
                 ClipList.SelectedItem = container;
         };
-        previewPanel.MouseLeftButtonUp += async (_, e) =>
+        if (previewPanel is not null)
         {
-            e.Handled = true;
-            ClipList.SelectedItem = container;
-            await _paste(item.Id);
-        };
-        previewPanel.Cursor = Cursors.Hand;
-        previewPanel.ToolTip = "Click to paste";
+            previewPanel.MouseLeftButtonUp += async (_, e) =>
+            {
+                e.Handled = true;
+                ClipList.SelectedItem = container;
+                await _paste(item.Id);
+            };
+            previewPanel.Cursor = Cursors.Hand;
+            previewPanel.ToolTip = "Click to paste";
+        }
         return row;
     }
 
@@ -464,6 +528,8 @@ public partial class PopupWindow : Window
     {
         EndTitle(false, false);
         ClosePalette(false);
+        CloseCategoryPicker(false);
+        EndCategoryEdit();
         ClipList.SelectedItem = row.Container;
         var editor = new TextBox
         {
@@ -502,13 +568,15 @@ public partial class PopupWindow : Window
             row.TitleHost.Children.Remove(editor);
             row.Title.Visibility = Visibility.Visible;
         }
-        if (processPending && (_refreshPending || save && SearchBox.Text.Length > 0)) Refresh();
+        if (processPending && (_refreshPending || save && (_compact || SearchBox.Text.Length > 0))) Refresh();
     }
 
     private void OpenPalette(Row row)
     {
         if (_openPalette == row) { _paletteTimer.Stop(); return; }
         ClosePalette(false);
+        CloseCategoryPicker(false);
+        EndCategoryEdit();
         ClipList.SelectedItem = row.Container;
         _openPalette = row;
         BuildPalette(row);
@@ -522,8 +590,7 @@ public partial class PopupWindow : Window
         foreach (var color in ((ClipColor[])Enum.GetValues(typeof(ClipColor))))
         {
             var dot = new Grid { Width = 20, Height = 20 };
-            var ellipse = new Ellipse { Fill = ColorBrush(color), StrokeThickness = 1 };
-            ellipse.SetResourceReference(Shape.StrokeProperty, "MutedBrush");
+            var ellipse = new Ellipse { Fill = ColorBrush(color) };
             dot.Children.Add(ellipse);
             if (color == row.Item.Color)
             {
@@ -574,6 +641,16 @@ public partial class PopupWindow : Window
 
     private async void OnKey(object sender, KeyEventArgs e)
     {
+        if (_categoryEditor is not null && _categoryEditHost?.IsKeyboardFocusWithin == true)
+        {
+            if (e.Key == Key.Escape || e.Key == Key.Enter && Keyboard.FocusedElement is TextBox)
+            {
+                e.Handled = true;
+                if (e.Key == Key.Escape) { EndCategoryEdit(); Refresh(); FocusSearch(); }
+                else Run(SaveCategoryEdit);
+            }
+            return;
+        }
         if (_editingRow is not null)
         {
             if (e.Key is Key.Enter or Key.Escape)
@@ -587,7 +664,8 @@ public partial class PopupWindow : Window
         if (e.Key == Key.Escape)
         {
             e.Handled = true;
-            if (_openPalette is not null) { ClosePalette(); FocusSearch(); }
+            if (_openCategoryRow is not null) { CloseCategoryPicker(); FocusSearch(); }
+            else if (_openPalette is not null) { ClosePalette(); FocusSearch(); }
             else HidePopup();
             return;
         }
@@ -613,7 +691,8 @@ public partial class PopupWindow : Window
 
     private void PreviewSelected()
     {
-        if (_refreshing || Selected is not { } row || !row.Item.HasImage || row.PreviewAttempted) return;
+        if (_refreshing || Selected is not { } row || !row.Item.HasImage || row.PreviewAttempted ||
+            row.Image is not { } preview) return;
         row.PreviewAttempted = true;
         try
         {
@@ -622,8 +701,8 @@ public partial class PopupWindow : Window
             var image = ImagePreview.Decode(payload);
             if (image is not null)
             {
-                row.Image.Source = image;
-                row.Image.Visibility = Visibility.Visible;
+                preview.Source = image;
+                preview.Visibility = Visibility.Visible;
             }
         }
         catch (Exception ex) { _report("Image preview is unavailable; the original clip can still be pasted.", ex); }

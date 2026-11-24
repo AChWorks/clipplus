@@ -11,7 +11,7 @@ using System.Windows.Threading;
 using ClipPlus;
 using ClipPlus.Core;
 
-internal static class Program
+internal static partial class Program
 {
     // This test intentionally changes the real clipboard. Run only on an
     // isolated test desktop with no real user data, never on a live machine.
@@ -126,9 +126,11 @@ internal static class Program
             store.SetPinned(id, true);
             store.SetColor(id, ClipColor.Blue);
             store.SetTitle(id, "Test title");
-            var popup = new PopupWindow(store, _ => Task.CompletedTask, (_, _) => { },
+            var preferences = new Preferences();
+            long? pastedId = null;
+            var popup = new PopupWindow(store, clip => { pastedId = clip; return Task.CompletedTask; }, (_, _) => { },
                 (message, error) => { if (error is not null) throw new InvalidOperationException(message, error); },
-                () => new Preferences());
+                () => preferences, (view, compact) => preferences = preferences with { ActiveView = view, CompactView = compact });
             popup.ShowAt(Native.Anchor(Native.GetForegroundWindow()));
             popup.UpdateLayout();
             // Exercise the reserved-shortcut fallback explicitly even when
@@ -163,6 +165,7 @@ internal static class Program
                 "WPF title match precedes pinned content match");
             search.Text = "No Title";
             Check(list.Items.Count == 0, "WPF untitled placeholder is not searchable");
+            VerifyCategoryFlow(popup, store, id, titleMatch, contentMatch, () => preferences, () => pastedId);
             var visibleColors = new HashSet<Color>();
             foreach (var color in ((ClipColor[])Enum.GetValues(typeof(ClipColor))).Where(c => c != ClipColor.Default))
             {

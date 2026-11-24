@@ -8,13 +8,20 @@ Use a disposable or explicitly authorized interactive Windows desktop. Use synth
 2. Copy distinct plain text in Notepad. Physically press Win+V. Verify the native popup does not also open, Start does not open or steal focus when Win is released, Search receives focus, standalone Win and unrelated shortcuts remain normal, normal Windows shortcuts and typing still work, Esc closes, repeated hotkey works, and native Win+V resumes after Exit. If the chord cannot be intercepted on this OS, test the alternate shortcuts and record the exact behavior; do not mark Win+V as passed.
 3. With text focus in Notepad, open ClipPlus, type a search, navigate using Up/Down and press Enter. Verify the original target receives the original content exactly once. Test mouse hover and preview click. Switch focus away while the popup is open: it should dismiss, and paste must never be sent to an unrelated app.
 4. Edit a title inline, save/cancel/clear, search Persian and English title/content, verify title matches precede even pinned content-only matches and No Title does not count as an actual title, and confirm only original content is pasted.
-5. Pin clips, copy 55+ distinct items, recopy a pinned and a recent clip, verify stable pinned-first order, 50 recent items, and preserved metadata. Unpin, delete, clear recent and restart.
+5. Pin clips, copy 105+ distinct items, recopy a pinned and a recent clip, verify stable pinned-first order, 100 recent items, and preserved metadata. Unpin, delete, clear recent and restart.
 6. Select each of eight colors and Default using mouse hover/click and keyboard. Verify no accidental paste or reorder, persistence on restart/recopy/pin-unpin, visible focus, no horizontal overflow, readable light/dark/high-contrast appearance, and selection feedback.
    With an overflowing history, verify the thin rounded scrollbar expands on hover,
    retains a usable pointer target and supports thumb dragging, page clicks,
    wheel scrolling and keyboard navigation. Check both themes and high contrast.
 7. Drag the header and resize vertically, hide and reopen, restart, move to another monitor/DPI, and test near screen edges. Verify saved position and height, work-area clamp and recovery of preferred height on the larger monitor; reset placement from the tray. Confirm the header controls remain clickable.
 8. Copy and paste plain Unicode, formatted HTML (e.g. browser to editor), PNG/bitmap image into Paint, and compare actual content. Verify image preview, duplicate recapture behavior, clipboard contention recovery, no self-capture loop, and privacy markers (ExcludeClipboardContentFromMonitorProcessing and CanIncludeInClipboardHistory=0 ignored; CanUploadToCloudClipboard=0 preserved on paste). Test partial SetClipboardData failures: publish the privacy marker first, never send paste after failure, clear partial restoration where possible.
+
+## Categories and compact view (v0.2.0)
+
+1. Create, rename, cancel, reorder (drag, edge scroll and keyboard), and delete custom categories. Verify the ten-category limit, duplicate/reserved name feedback, horizontal wheel scrolling, fixed controls and active state. Delete only after the second click; confirm assigned payloads, pins, colors and titles survive. Repeat with long Persian/English names and restart.
+2. Assign/change/remove a category on pinned and unpinned clips, recopy a categorized clip, verify global Pinned/Recent and pinned-first custom views, and search across all categories with title-first ranking; clear the query to return to the selected view. Verify Clear recent and 100-item retention are global and preserve pins.
+3. Toggle compact mode: only titled previews collapse; untitled text/image previews remain; use mouse Paste clip and keyboard Enter, title editing, category selection, color, pin and delete. Verify focus, Escape/cancellation, recapture during editing, saved mode/selected view, and unchanged geometry. Check search/category/card alignment with and without overflowing history, borderless colors, contrast, DPI and themes.
+4. Open a v0.1.0 database with pinned and recent payloads, verify migration is additive, repeat opening and use categories; verify existing settings load and defaults apply to new preferences. Test update/rollback with the additive schema and retained data.
 
 ## Installation / privilege / lifecycle
 

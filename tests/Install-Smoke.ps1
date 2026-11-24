@@ -223,7 +223,7 @@ function Invoke-ScriptFixture([string]$Fault) {
     }
     $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
     if ($Fault -eq 'corrupt-payload') { $hash = '0' * 64 }
-    @{product='AChWorks.ClipPlus';version='0.1.0';rid='windows-anycpu';
+    @{product='AChWorks.ClipPlus';version=([Diagnostics.FileVersionInfo]::GetVersionInfo($portableFile).ProductVersion);rid='windows-anycpu';
       files=@(@{path='ClipPlus.exe';sha256=$hash})} |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $fixture 'manifest.json') -Encoding utf8NoBOM
 
