@@ -110,24 +110,26 @@ try {
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Uninstall removed durable state.' }
     Write-Host 'PASS: standard uninstaller removed app, task and Installed Apps entry; history preserved.'
 
-    # Limited token availability depends on UAC configuration. Verify the
-    # optional non-elevated task on runners with UAC enabled.
-    $policy = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-    if ($policy.EnableLUA -eq 1) {
-        Invoke-Wizard $setupFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="""" /LOG=""$log"""
-        $installed = $true
-        $task = Get-OwnedTask $context
-        if ($task.Principal.RunLevel -ne 'Limited') { throw 'Unselected administrator option did not register limited startup.' }
-        $normalReady = Get-Content -LiteralPath (Join-Path $context.NormalData 'ready.json') -Raw | ConvertFrom-Json
-        if ($normalReady.elevated) { throw 'Limited startup unexpectedly elevated.' }
-        Write-Host 'PASS: optional normal startup runs without elevation.'
-        Remove-Wizard
-        $installed = $false
+    # Test the unchecked option on the actual account. Limited startup
+    # uses its ordinary token, which can itself be administrative under
+    # Windows policy when there is no split token.
+    $normalStarted = [DateTime]::UtcNow
+    Invoke-Wizard $setupFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="""" /LOG=""$log"""
+    $installed = $true
+    $task = Get-OwnedTask $context
+    if ($task.Principal.RunLevel -ne 'Limited') { throw 'Unselected administrator option did not register limited startup.' }
+    $normalReady = Get-ReadyInstance $context $normalStarted
+    if ($null -eq $normalReady) { throw 'Limited startup has no matching readiness marker.' }
+    if ($normalReady.elevated) {
+        if ($normalReady.elevationType -ne 1) { throw 'Limited startup unexpectedly elevated a split token.' }
+        Write-Host 'PASS: Limited task used the account default token; Windows reports no split token (ordinary token is administrative).'
     } else {
-        Write-Host 'LIMITATION: runner has UAC disabled; a filtered normal token is unavailable.'
+        Write-Host 'PASS: optional normal startup runs without elevation.'
     }
+    Remove-Wizard
+    $installed = $false
 } catch {
-    foreach ($file in @($log, $uninstallLog, (Join-Path $context.Data 'diagnostics.log'))) {
+    foreach ($file in @($log, $uninstallLog, (Join-Path $context.Data 'diagnostics.log'), (Join-Path $context.NormalData 'diagnostics.log'))) {
         if (Test-Path -LiteralPath $file) { Get-Content -LiteralPath $file -Tail 80 | Write-Host }
     }
     throw

@@ -17,7 +17,7 @@ A minimal, native Windows clipboard history manager: the familiar Copy/Paste wor
 ## Download and install
 
 - **ClipPlus.exe**: portable single executable. Exit any existing ClipPlus instance from the tray, then launch directly. Run as administrator when you need to paste into elevated applications.
-- **ClipPlus-Setup.exe**: graphical Windows installation. Next, choose whether to run as administrator, Install, Finish. It starts at logon in the chosen mode, provides a Start menu shortcut, and registers in Settings > Apps > Installed apps. Run Setup again to update; history and settings are preserved. Uninstall from Installed apps.
+- **ClipPlus-Setup.exe**: graphical Windows installation. Next, choose whether to run as administrator, Install, Finish. It starts at logon in the chosen mode (normal uses the account's ordinary Windows token; accounts without a filtered token may already be administrators), provides a Start menu shortcut, and registers in Settings > Apps > Installed apps. Run Setup again to update; history and settings are preserved. Uninstall from Installed apps.
 
 No separately installed modern .NET Desktop Runtime is required. ClipPlus uses the Windows .NET Framework 4.7.2 or later and Windows-provided SQLite, both normally present on modern Windows 10 and Windows 11. Older Windows installations may need the OS component enabled/updated; see [Microsoft's version table](https://learn.microsoft.com/dotnet/framework/install/versions-and-dependencies). Actual runtime acceptance on every Windows edition and architecture is not claimed.
 

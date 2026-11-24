@@ -80,6 +80,7 @@ public partial class App : Application
                 pid = ProcessId,
                 version = typeof(App).Assembly.GetName().Version?.ToString(),
                 elevated = StateDirectory.Elevated,
+                elevationType = StateDirectory.ElevationType,
                 shortcut = _preferences.Shortcut.ToString(),
                 shortcutMechanism = _shortcut.Mechanism
             }));

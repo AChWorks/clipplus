@@ -39,7 +39,7 @@ MinVersion=10.0
 ChangesAssociations=no
 
 [Tasks]
-Name: "elevated"; Description: "Run ClipPlus as administrator (also start automatically when I sign in)"; GroupDescription: "Startup options:"; Flags: checkedonce
+Name: "elevated"; Description: "Use administrator privileges for automatic startup (otherwise use normal account privileges)"; GroupDescription: "Startup options:"; Flags: checkedonce
 
 [Files]
 Source: "{#PayloadDir}\Setup.Common.ps1"; Flags: dontcopy

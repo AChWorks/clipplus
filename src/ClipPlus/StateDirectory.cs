@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
@@ -9,6 +10,23 @@ internal static class StateDirectory
 {
     internal static bool Elevated => new WindowsPrincipal(WindowsIdentity.GetCurrent())
         .IsInRole(WindowsBuiltInRole.Administrator);
+
+    // TokenElevationTypeDefault (1) means Windows did not create a split
+    // token. In that environment the user's ordinary token may itself be
+    // an administrator token (e.g. built-in Administrator/UAC policy).
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(IntPtr token, int informationClass,
+        out int value, int length, out int returned);
+
+    internal static int ElevationType
+    {
+        get
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return GetTokenInformation(identity.Token, 18, out var value, sizeof(int), out _)
+                ? value : 0;
+        }
+    }
 
     internal static string Open(string sid)
     {

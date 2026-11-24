@@ -171,33 +171,52 @@ function Register-ClipPlusTask($Context, [switch]$NormalStartup) {
     }
 }
 
+function Get-ReadyInstance($Context, [DateTime]$Started) {
+    $processes = @(Get-OwnedProcesses $Context)
+    if ($processes.Count -ne 1) { return $null }
+    foreach ($data in @($Context.Data, $Context.NormalData)) {
+        $path = Join-Path $data 'ready.json'
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        Assert-NoReparsePoint $path
+        try {
+            $file = Get-Item -LiteralPath $path
+            $ready = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            if ($file.LastWriteTimeUtc -ge $Started -and $ready.pid -eq $processes[0].ProcessId) {
+                return $ready
+            }
+        } catch {
+            # A newly started process can still be writing its readiness file.
+        }
+    }
+    return $null
+}
+
 function Start-ClipPlusAndVerify($Context) {
     $task = Get-OwnedTask $Context
     if ($null -eq $task) { throw 'ClipPlus startup task is missing.' }
-    $elevated = $task.Principal.RunLevel -eq 'Highest'
-    $data = if ($elevated) { $Context.Data } else { $Context.NormalData }
+    $highest = $task.Principal.RunLevel -eq 'Highest'
     $started = [DateTime]::UtcNow
     Start-ScheduledTask -TaskName $Context.Task -TaskPath '\'
-    $readyPath = Join-Path $data 'ready.json'
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 250
-        $processes = @(Get-OwnedProcesses $Context)
-        if ($processes.Count -ne 1 -or -not (Test-Path -LiteralPath $readyPath -PathType Leaf)) { continue }
-        Assert-NoReparsePoint $readyPath
-        try {
-            $file = Get-Item -LiteralPath $readyPath
-            $ready = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
-            if ($file.LastWriteTimeUtc -ge $started -and $ready.pid -eq $processes[0].ProcessId -and
-                $ready.elevated -eq $elevated) {
-                Write-Host "ClipPlus $($ready.version) is running (Administrator: $elevated)."
-                return
-            }
-        } catch {
-            # Readiness is written by the new process; retry while it is incomplete.
+        $ready = Get-ReadyInstance $Context $started
+        if ($null -eq $ready) { continue }
+        if ($highest -and -not $ready.elevated) {
+            throw 'ClipPlus started but Windows did not grant the requested administrator token.'
         }
+        if (-not $highest -and $ready.elevated) {
+            # Limited means use the ordinary token. Some administrator accounts
+            # do not have a split token; Limited cannot manufacture one.
+            if ($null -eq $ready.PSObject.Properties['elevationType'] -or $ready.elevationType -ne 1) {
+                throw 'Windows launched the limited task elevated despite a split or unknown token. Choose administrator startup or launch the portable app with a normal user.'
+            }
+            Write-Warning 'This Windows account has no separate filtered token; its ordinary token is already administrative.'
+        }
+        Write-Host "ClipPlus $($ready.version) is running (Administrator: $($ready.elevated))."
+        return
     }
     $taskInfo = Get-ScheduledTaskInfo -TaskName $Context.Task -TaskPath '\'
-    throw "ClipPlus did not report readiness. Task result: $($taskInfo.LastTaskResult). Check $data\diagnostics.log and close any separately running ClipPlus instance."
+    throw "ClipPlus did not report readiness. Task result: $($taskInfo.LastTaskResult). Check $($Context.Data) or $($Context.NormalData) diagnostics.log and close any separately running ClipPlus instance."
 }
 
 function Enter-SetupLock($Context) {
