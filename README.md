@@ -1,6 +1,6 @@
 # ClipPlus
 
-A minimal, native Windows clipboard history manager that preserves the familiar Copy/Paste workflow while adding search, editable titles, persistent window height, and pinned-first history.
+A minimal, native Windows clipboard history manager that preserves the familiar Copy/Paste workflow while adding search, editable titles, per-clip colors, persistent window height, and pinned-first history.
 
 **Status:** Project initialized. Implementation and Windows runtime validation are pending.
 
