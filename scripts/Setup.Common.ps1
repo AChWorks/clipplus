@@ -110,7 +110,14 @@ function Get-OwnedTask($Context) {
 function Get-OwnedProcesses($Context) {
     foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='ClipPlus.exe'")) {
         if ($process.ExecutablePath -ine $Context.Exe) { continue }
-        $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
+        # The scheduled task can exit between the CIM snapshot and owner
+        # lookup. Only ignore a vanished process, not an access/provider error.
+        try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid }
+        catch {
+            $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($process.ProcessId)"
+            if ($null -eq $current -or $current.CreationDate -ne $process.CreationDate) { continue }
+            throw
+        }
         if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $Context.Sid) {
             $process
         }
@@ -120,7 +127,16 @@ function Get-OwnedProcesses($Context) {
 function Stop-ClipPlus($Context) {
     $task = Get-OwnedTask $Context
     if ($null -ne $task -and $task.State -in @('Running','Queued')) {
-        Stop-ScheduledTask -TaskName $Context.Task -TaskPath '\'
+        try { Stop-ScheduledTask -TaskName $Context.Task -TaskPath '\' }
+        catch {
+            $current = Get-OwnedTask $Context
+            if ($null -ne $current -and $current.State -in @('Running','Queued')) { throw }
+        }
+        # Let task termination settle before inspecting its process.
+        for ($i = 0; $i -lt 10; $i++) {
+            if (@(Get-OwnedProcesses $Context).Count -eq 0) { return }
+            Start-Sleep -Milliseconds 150
+        }
     }
     foreach ($process in @(Get-OwnedProcesses $Context)) {
         Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue

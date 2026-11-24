@@ -39,7 +39,8 @@ try {
     # Visible, actionable setup failure (no clipboard content).
     try {
         Assert-NoReparsePoint $log
-        [IO.File]::WriteAllText($log, $_.Exception.Message, [Text.Encoding]::UTF8)
+        $details = "$($_.Exception.Message)`r`n$($_.FullyQualifiedErrorId)`r`n$($_.ScriptStackTrace)"
+        [IO.File]::WriteAllText($log, $details, [Text.UTF8Encoding]::new($false))
     } catch {}
     exit 1
 }
