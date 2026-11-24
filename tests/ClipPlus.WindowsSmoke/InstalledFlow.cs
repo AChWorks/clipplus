@@ -332,7 +332,7 @@ internal static class InstalledFlow
         {
             VirtualKey = key,
             Scan = (ushort)Native.MapVirtualKey(key, 0),
-            Flags = (up ? 2u : 0) | (key is Native.VkLWin or Native.VkRWin ? 1u : 0)
+            Flags = (up ? 2u : 0) | (key is Native.VkLWin or Native.VkRWin or 0x21 or 0x22 or 0x23 or 0x24 or 0x25 or 0x26 or 0x27 or 0x28 ? 1u : 0)
         } }
     };
 

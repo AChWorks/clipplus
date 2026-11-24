@@ -33,6 +33,7 @@ public partial class PopupWindow : Window
     private bool _placing, _refreshing, _refreshPending, _dark;
     private bool _inMoveSize, _userMoving, _userSizing;
     private Native.Rect _moveStart;
+    private Native.Point? _keyboardCursor;
 
     private sealed class Row(ClipItem item, ListBoxItem container, Button title, Grid titleHost,
         Border accent, Button swatch, Ellipse swatchDot, Border palette, UniformGrid choices, Image image)
@@ -143,6 +144,7 @@ public partial class PopupWindow : Window
         try
         {
             ApplyTheme();
+            _keyboardCursor = null;
             SearchBox.Text = "";
             ClosePalette(false);
             EndTitle(false, false);
@@ -398,6 +400,14 @@ public partial class PopupWindow : Window
         };
         container.MouseMove += (_, _) =>
         {
+            // WPF can raise mouse movement during layout/scrolling even
+            // with a stationary pointer. Do not let it undo keyboard
+            // selection until the user actually moves the pointer.
+            if (_keyboardCursor is { } previous && Native.GetCursorPos(out var current))
+            {
+                if (current.X == previous.X && current.Y == previous.Y) return;
+                _keyboardCursor = null;
+            }
             if (_editingRow is null && (_openPalette is null || _openPalette == row))
                 ClipList.SelectedItem = container;
         };
@@ -588,6 +598,7 @@ public partial class PopupWindow : Window
         {
             e.Handled = true;
             if (ClipList.Items.Count == 0) return;
+            _keyboardCursor = Native.GetCursorPos(out var cursor) ? cursor : null;
             var current = ClipList.SelectedIndex;
             var index = current < 0 ? 0 : Clamp(current + (e.Key == Key.Down ? 1 : -1), 0, ClipList.Items.Count - 1);
             ClipList.SelectedIndex = index;

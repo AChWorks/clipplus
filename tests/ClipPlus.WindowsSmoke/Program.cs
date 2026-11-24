@@ -231,18 +231,22 @@ internal static class Program
             InstalledFlow.SendMouse(0x0800, unchecked((uint)-120));
             PumpUntil(() => viewer.VerticalOffset > 0);
             Check(viewer.VerticalOffset > 0, "native mouse wheel scrolls history");
-            list.SelectedIndex = 0;
             viewer.ScrollToTop();
             popup.UpdateLayout();
-            search.Focus();
-            System.Windows.Input.Keyboard.Focus(search);
+            InstalledFlow.Pump(TimeSpan.FromMilliseconds(120));
+            popup.FocusSearch();
+            PumpUntil(() => search.IsKeyboardFocused);
+            Check(search.IsKeyboardFocused && Native.GetForegroundWindow() == popup.Handle,
+                "keyboard navigation has active search focus");
+            list.SelectedIndex = 0;
             for (var i = 0; i < 16; i++)
             {
                 InstalledFlow.SendKeys(InstalledFlow.KeyInput(0x28), InstalledFlow.KeyInput(0x28, true));
-                InstalledFlow.Pump(TimeSpan.FromMilliseconds(20));
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(45));
             }
-            Check(list.SelectedIndex >= 12 && viewer.VerticalOffset > 0,
-                "keyboard navigation scrolls overflowing history");
+            PumpUntil(() => viewer.VerticalOffset > 0);
+            Check(list.SelectedIndex == 16 && viewer.VerticalOffset > 0,
+                $"keyboard navigation scrolls overflowing history with stationary pointer (index={list.SelectedIndex}, offset={viewer.VerticalOffset})");
 
 
             var notices = ThirdPartyNotices.Read();
