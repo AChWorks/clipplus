@@ -115,12 +115,24 @@ public partial class PopupWindow : Window
             _inMoveSize = false;
             if (!Native.GetWindowRect(hwnd, out var rect)) return 0;
             var moved = rect.Left != _moveStart.Left || rect.Top != _moveStart.Top;
-            WindowPosition? position = moved && (_userMoving || _userSizing)
-                ? new WindowPosition(rect.Left, rect.Top) : null;
             var resized = _userSizing && rect.Bottom - rect.Top != _moveStart.Bottom - _moveStart.Top;
-            double? height = resized
-                ? (rect.Bottom - rect.Top) / VisualTreeHelper.GetDpi(this).DpiScaleY : null;
-            if (position is not null || height is not null) _saveGeometry(height, position);
+            if ((!moved || !(_userMoving || _userSizing)) && !resized) return 0;
+            var monitor = Native.MonitorFromRect(ref rect, 2);
+            var scale = MonitorScale(monitor);
+            double? height = resized ? (rect.Bottom - rect.Top) / scale : null;
+            // Reuse the opening placement path on the destination monitor,
+            // preserving the requested (unclamped) height across displays.
+            Run(() =>
+            {
+                _placing = true;
+                try
+                {
+                    var actual = PlaceWindow(hwnd, monitor, new Native.Point { X = rect.Left, Y = rect.Top },
+                        height ?? _preferences().WindowHeight, false);
+                    _saveGeometry(height, new WindowPosition(actual.X, actual.Y));
+                }
+                finally { _placing = false; }
+            });
         }
         return 0;
     }
@@ -143,35 +155,10 @@ public partial class PopupWindow : Window
             if (position is not null)
                 anchor = new Native.Point { X = position.X, Y = position.Y };
             var monitor = Native.MonitorFromPoint(anchor, 2);
-            var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
-            if (monitor == 0 || !Native.GetMonitorInfo(monitor, ref info))
-                throw Native.Error("GetMonitorInfo");
-
-            var scale = Native.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 && dpiX > 0
-                ? dpiX / 96.0 : 1.0;
-            var work = info.Work;
-            var width = Math.Min(360.0, (work.Right - work.Left) / scale);
-            var available = (work.Bottom - work.Top) / scale;
-            MinWidth = 0;
-            MaxWidth = width;
-            MinWidth = width;
-            Width = width;
-            MinHeight = 0;
-            MaxHeight = available;
-            MinHeight = Math.Min(240, available);
-            Height = Clamp(preferences.WindowHeight, MinHeight, MaxHeight);
-
-            var pxWidth = Math.Min(work.Right - work.Left, (int)Math.Round(Width * scale));
-            var pxHeight = Math.Min(work.Bottom - work.Top, (int)Math.Round(Height * scale));
-            var x = Clamp(anchor.X, work.Left, work.Right - pxWidth);
-            var y = position is not null || (long)anchor.Y + pxHeight <= work.Bottom
-                ? anchor.Y : anchor.Y - pxHeight;
-            y = Clamp(y, work.Top, work.Bottom - pxHeight);
             var hwnd = new WindowInteropHelper(this).EnsureHandle();
-            Native.SetWindowPos(hwnd, 0, x, y, pxWidth, pxHeight, 0x0014); // NOZORDER | NOACTIVATE
+            PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null);
             Show();
-            if (!Native.SetWindowPos(hwnd, 0, x, y, pxWidth, pxHeight, 0x0014))
-                throw Native.Error("SetWindowPos");
+            PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null);
             Activate();
             if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
             FocusSearch();
@@ -183,6 +170,49 @@ public partial class PopupWindow : Window
             }));
         }
         finally { _placing = false; }
+    }
+
+    private static double MonitorScale(nint monitor) =>
+        Native.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 && dpiX > 0 ? dpiX / 96.0 : 1.0;
+
+    // One placement calculation for initial contextual placement, restored
+    // coordinates and the end of a native move/resize operation.
+    internal static Native.Rect FitBounds(Native.Rect work, double scale, Native.Point anchor,
+        double preferredHeight, bool contextual)
+    {
+        var width = Math.Min(work.Right - work.Left, (int)Math.Round(360 * scale));
+        var available = work.Bottom - work.Top;
+        var height = Math.Min(available, (int)Math.Round(Clamp(preferredHeight,
+            Math.Min(240, available / scale), available / scale) * scale));
+        var x = Clamp(anchor.X, work.Left, work.Right - width);
+        var y = !contextual || (long)anchor.Y + height <= work.Bottom
+            ? (long)anchor.Y : (long)anchor.Y - height;
+        var top = (int)Math.Max(work.Top, Math.Min(y, work.Bottom - height));
+        return new Native.Rect { Left = x, Top = top, Right = x + width, Bottom = top + height };
+    }
+
+    private Native.Point PlaceWindow(nint hwnd, nint monitor, Native.Point anchor, double preferredHeight, bool contextual)
+    {
+        var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
+        if (monitor == 0 || !Native.GetMonitorInfo(monitor, ref info))
+            throw Native.Error("GetMonitorInfo");
+        var scale = MonitorScale(monitor);
+        var work = info.Work;
+        var width = Math.Min(360.0, (work.Right - work.Left) / scale);
+        var available = (work.Bottom - work.Top) / scale;
+        MinWidth = 0;
+        MaxWidth = width;
+        MinWidth = width;
+        Width = width;
+        MinHeight = 0;
+        MaxHeight = available;
+        MinHeight = Math.Min(240, available);
+        Height = Clamp(preferredHeight, MinHeight, MaxHeight);
+        var bounds = FitBounds(work, scale, anchor, preferredHeight, contextual);
+        if (!Native.SetWindowPos(hwnd, 0, bounds.Left, bounds.Top,
+            bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, 0x0014))
+            throw Native.Error("SetWindowPos");
+        return new Native.Point { X = bounds.Left, Y = bounds.Top };
     }
 
     internal void HidePopup()

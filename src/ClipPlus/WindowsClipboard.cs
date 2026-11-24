@@ -6,6 +6,13 @@ using ClipPlus.Core;
 
 namespace ClipPlus;
 
+internal sealed class ClipboardRestoreException : Exception
+{
+    internal ClipboardRestoreException(bool cleared, Exception cause)
+        : base(cleared ? "Clipboard restore failed. The clipboard was cleared; the saved clip is unchanged."
+            : "Clipboard restore failed. Clipboard contents may be incomplete; the saved clip is unchanged.", cause) { }
+}
+
 internal sealed class WindowsClipboard
 {
     private readonly nint _hwnd;
@@ -57,6 +64,10 @@ internal sealed class WindowsClipboard
                 var id = pair.Value;
                 if (!Native.IsClipboardFormatAvailable(id)) continue;
                 var bytes = ReadGlobal(id);
+                // Do not silently drop a malformed cloud-policy marker and
+                // capture its content as unrestricted.
+                if (format == ClipFormat.NoCloudUpload && bytes.Length < 4)
+                    return (null, Sequence);
                 if (bytes.Length > 0) data.Add(format, bytes);
             }
             return data.Count == 0 || (data.Count == 1 && data.ContainsKey(ClipFormat.NoCloudUpload))
@@ -65,7 +76,11 @@ internal sealed class WindowsClipboard
         finally { Native.CloseClipboard(); }
     }
 
-    internal void Restore(ClipPayload payload)
+    internal void Restore(ClipPayload payload) => Restore(payload, Native.SetClipboardData);
+
+    // The injected publisher is used by the isolated native regression tests.
+    // Production always uses SetClipboardData directly.
+    internal void Restore(ClipPayload payload, Func<uint, nint, nint> publish)
     {
         // Prepare every owned HGLOBAL before changing the clipboard. A
         // successful SetClipboardData transfers ownership to Windows.
@@ -79,9 +94,26 @@ internal sealed class WindowsClipboard
             try
             {
                 if (!Native.EmptyClipboard()) throw Native.Error("EmptyClipboard");
-                foreach (var id in new List<uint>(allocated.Keys))
+                try
                 {
-                    if (Native.SetClipboardData(id, allocated[id]) == 0)
+                    // Transfer the policy marker before any protected content,
+                    // independently of dictionary/enum ordering.
+                    var policy = _formats[ClipFormat.NoCloudUpload];
+                    if (allocated.ContainsKey(policy)) Publish(policy);
+                    foreach (var id in new List<uint>(allocated.Keys)) Publish(id);
+                }
+                catch (Exception error)
+                {
+                    // SetClipboardData is not atomic. Never paste a partial
+                    // restore, and attempt to clear it while still holding the
+                    // lock. If clearing fails, protected content still has its
+                    // policy marker because it was published first.
+                    throw new ClipboardRestoreException(Native.EmptyClipboard(), error);
+                }
+
+                void Publish(uint id)
+                {
+                    if (publish(id, allocated[id]) == 0)
                         throw Native.Error("SetClipboardData");
                     allocated.Remove(id);
                 }

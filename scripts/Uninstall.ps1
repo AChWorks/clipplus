@@ -8,6 +8,16 @@ if ($ExpectedSid -and $context.Sid -ne $ExpectedSid) { throw "Sign in to the acc
 $mutex = Enter-SetupLock $context
 try {
     Assert-NoReparsePoint $context.Root
+    if (Test-Path -LiteralPath $context.Transaction) {
+        $file = Join-Path $context.Transaction 'state.json'
+        Assert-NoReparsePoint $context.Transaction
+        Assert-NoReparsePoint $file
+        $state = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+        if ($state.product -ne 'AChWorks.ClipPlus' -or $state.sid -ne $context.Sid -or
+            $state.phase -notin @('committed','rolled-back')) {
+            throw "Complete or recover the pending ClipPlus setup before uninstalling: $($context.Transaction)"
+        }
+    }
     if (Test-Path -LiteralPath $context.Install) { Assert-OwnedInstall $context $context.Install }
     $task = Get-OwnedTask $context
     Stop-ClipPlus $context

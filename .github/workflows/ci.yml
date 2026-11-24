@@ -38,10 +38,10 @@ jobs:
           }
       - name: Build portable executable and graphical installer
         shell: pwsh
-        run: ./scripts/Build-Package.ps1
+        run: ./scripts/Build-Package.ps1 -BuildFaultHarness
       - name: Exercise portable and installer lifecycle on isolated Windows
         shell: pwsh
-        run: ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe
+        run: ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe
       - name: Upload verified candidate files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -51,5 +51,6 @@ jobs:
             artifacts/ClipPlus.exe.sha256
             artifacts/ClipPlus-Setup.exe
             artifacts/ClipPlus-Setup.exe.sha256
+            artifacts/THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
           retention-days: 14

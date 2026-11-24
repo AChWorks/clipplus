@@ -26,7 +26,12 @@ UsePreviousLanguage=no
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible or arm64
 OutputDir={#OutputDir}
+#ifdef FaultHarness
+OutputBaseFilename=ClipPlus-Setup-FaultTest
+#else
 OutputBaseFilename=ClipPlus-Setup
+#endif
+SetupMutex=Global\AChWorks.ClipPlus.SetupWizard
 SetupIconFile=..\src\ClipPlus\Assets\ClipPlus.ico
 UninstallDisplayIcon={code:InstalledExe}
 UninstallDisplayName=ClipPlus
@@ -53,7 +58,7 @@ Source: "{#PayloadDir}\Invoke-Setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\Uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\ClipPlus"; Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn ""ClipPlus-{code:UserSid}"""; IconFilename: "{code:InstalledExe}"; Flags: runminimized
+Name: "{commonprograms}\ClipPlus"; Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn ""ClipPlus-{code:UserSid}"""; IconFilename: "{code:InstalledExe}"; Flags: runminimized
 
 [UninstallDelete]
 Type: files; Name: "{app}\setup-error.txt"
@@ -61,6 +66,10 @@ Type: files; Name: "{app}\setup-error.txt"
 [Code]
 var
   CurrentSid: String;
+  TransactionPrepared, TransactionCommitted, CommitFailed: Boolean;
+#ifdef FaultHarness
+  CancelInjected: Boolean;
+#endif
 
 function UserSid(Param: String): String;
 begin
@@ -139,10 +148,76 @@ begin
     Options := '-ExpectedSid "' + CurrentSid + '"';
     if not WizardIsTaskSelected('elevated') then Options := Options + ' -NormalStartup';
     Result := RunAction(ExpandConstant('{tmp}'), 'Install', Options);
+    TransactionPrepared := Result = '';
   except
     Result := GetExceptionMessage;
   end;
 end;
+
+procedure RollbackWizard;
+var
+  Error: String;
+begin
+  if not TransactionPrepared or TransactionCommitted then exit;
+  Error := RunAction(ExpandConstant('{tmp}'), 'Rollback', '-ExpectedSid "' + CurrentSid + '"');
+  if Error <> '' then begin
+    Log('ClipPlus rollback failed: ' + Error);
+    SuppressibleMsgBox(Error, mbError, MB_OK, IDOK);
+  end else begin
+    TransactionPrepared := False;
+    Log('ClipPlus transaction rolled back.');
+  end;
+end;
+
+procedure CurStepChanged(Step: TSetupStep);
+var
+  Error: String;
+begin
+#ifdef FaultHarness
+  if (Step = ssInstall) and (ExpandConstant('{param:TestFault|}') = 'after-activation') then
+    RaiseException('Injected test-only wizard failure after application activation.');
+#endif
+  if (Step = ssDone) and TransactionPrepared then begin
+    Error := RunAction(ExpandConstant('{tmp}'), 'Commit', '-ExpectedSid "' + CurrentSid + '"');
+    TransactionCommitted := Error = '';
+    if not TransactionCommitted then begin
+      CommitFailed := True;
+      Log('ClipPlus commit failed: ' + Error);
+      RollbackWizard;
+      SuppressibleMsgBox(Error, mbError, MB_OK, IDOK);
+    end;
+  end;
+end;
+
+procedure DeinitializeSetup;
+begin
+  RollbackWizard;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  if CommitFailed then Result := 9 else Result := 0;
+end;
+
+#ifdef FaultHarness
+procedure CancelButtonClick(PageID: Integer; var Cancel, Confirm: Boolean);
+begin
+  if CancelInjected then begin
+    Cancel := True;
+    Confirm := False;
+  end;
+end;
+
+procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer);
+begin
+  if (not CancelInjected) and (CurProgress > 0) and
+     (ExpandConstant('{param:TestFault|}') = 'cancel-install') then begin
+    CancelInjected := True;
+    Log('Injecting test-only wizard cancellation during installation.');
+    WizardForm.Close;
+  end;
+end;
+#endif
 
 procedure CurUninstallStepChanged(Step: TUninstallStep);
 var

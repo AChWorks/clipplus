@@ -15,6 +15,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/ClipPlus.ico"/>
+    <EmbeddedResource Include="../../docs/licenses/*.txt">
+      <LogicalName>ClipPlus.Notices.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
     <ProjectReference Include="../ClipPlus.Core/ClipPlus.Core.csproj" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>

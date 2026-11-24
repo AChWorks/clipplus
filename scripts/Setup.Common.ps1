@@ -23,6 +23,10 @@ function Get-ClipPlusContext {
         Data = Join-Path (Join-Path $programFiles 'ClipPlusData') $sid
         NormalData = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'ClipPlus'
         Task = "ClipPlus-$sid"
+        RegistrationDir = Join-Path (Join-Path $root 'Installers') $sid
+        RegistrationKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ClipPlus-$($sid)_is1"
+        Shortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)) 'ClipPlus.lnk'
+        Transaction = Join-Path $root ".transaction-$sid"
     }
 }
 
@@ -171,24 +175,139 @@ function Register-ClipPlusTask($Context, [switch]$NormalStartup) {
     }
 }
 
+# Query the actual process token, not the self-reported ready.json fields.
+# Compile the small native interop helper only in the protected install root.
+function Initialize-ProcessTokenReader($Context) {
+    if ('ClipPlusSetup.ProcessTokenReader' -as [type]) { return }
+    Initialize-InstallRoot $Context.Root
+    $temp = Join-Path $Context.Root ('.token-reader-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $temp | Out-Null
+    $oldTemp = $env:TEMP
+    $oldTmp = $env:TMP
+    try {
+        $env:TEMP = $temp
+        $env:TMP = $temp
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Text;
+
+namespace ClipPlusSetup {
+    public sealed class ProcessTokenSnapshot {
+        public bool Elevated;
+        public int ElevationType;
+        public string Sid;
+        public string Image;
+        public DateTime Started;
+    }
+    public static class ProcessTokenReader {
+        [DllImport("kernel32.dll", SetLastError=true)]
+        private static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        private static extern bool CloseHandle(IntPtr handle);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        private static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder name, ref int length);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+        [DllImport("advapi32.dll", SetLastError=true)]
+        private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError=true)]
+        private static extern bool GetTokenInformation(IntPtr token, int kind, out int value, int size, out int returned);
+        [DllImport("advapi32.dll", EntryPoint="GetTokenInformation", SetLastError=true)]
+        private static extern bool GetTokenBuffer(IntPtr token, int kind, IntPtr value, int size, out int returned);
+        private static string ReadSid(IntPtr token) {
+            int size;
+            GetTokenBuffer(token, 1, IntPtr.Zero, 0, out size);
+            if (size <= 0) throw new Win32Exception(Marshal.GetLastWin32Error(), "TokenUser size");
+            IntPtr buffer = Marshal.AllocHGlobal(size);
+            try {
+                int returned;
+                if (!GetTokenBuffer(token, 1, buffer, size, out returned))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "TokenUser");
+                return new SecurityIdentifier(Marshal.ReadIntPtr(buffer)).Value;
+            } finally { Marshal.FreeHGlobal(buffer); }
+        }
+        private static int ReadInt(IntPtr token, int kind) {
+            int value, returned;
+            if (!GetTokenInformation(token, kind, out value, 4, out returned))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetTokenInformation");
+            return value;
+        }
+        public static ProcessTokenSnapshot Read(int pid) {
+            IntPtr process = OpenProcess(0x00101000, false, pid); // SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+            if (process == IntPtr.Zero) {
+                int error = Marshal.GetLastWin32Error();
+                if (error == 87) return null; // process disappeared
+                throw new Win32Exception(error, "OpenProcess");
+            }
+            try {
+                if (WaitForSingleObject(process, 0) == 0) return null;
+                IntPtr token;
+                if (!OpenProcessToken(process, 0x0008, out token))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken");
+                try {
+                    int length = 32768;
+                    var image = new StringBuilder(length);
+                    long creation, exit, kernel, user;
+                    if (!QueryFullProcessImageName(process, 0, image, ref length) ||
+                        !GetProcessTimes(process, out creation, out exit, out kernel, out user))
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Query process identity");
+                    var result = new ProcessTokenSnapshot {
+                        Elevated = ReadInt(token, 20) != 0,
+                        ElevationType = ReadInt(token, 18),
+                        Sid = ReadSid(token),
+                        Image = image.ToString(),
+                        Started = DateTime.FromFileTimeUtc(creation)
+                    };
+                    return WaitForSingleObject(process, 0) == 0 ? null : result;
+                } finally { CloseHandle(token); }
+            } finally { CloseHandle(process); }
+        }
+    }
+}
+'@
+    } finally {
+        $env:TEMP = $oldTemp
+        $env:TMP = $oldTmp
+        Remove-Item -LiteralPath $temp -Recurse -Force
+    }
+}
+
 function Get-ReadyInstance($Context, [DateTime]$Started) {
     $processes = @(Get-OwnedProcesses $Context)
     if ($processes.Count -ne 1) { return $null }
-    foreach ($data in @($Context.Data, $Context.NormalData)) {
-        $path = Join-Path $data 'ready.json'
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-        Assert-NoReparsePoint $path
-        try {
-            $file = Get-Item -LiteralPath $path
-            $ready = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-            if ($file.LastWriteTimeUtc -ge $Started -and $ready.pid -eq $processes[0].ProcessId) {
-                return $ready
-            }
-        } catch {
-            # A newly started process can still be writing its readiness file.
-        }
+    $pidOfApp = [int]$processes[0].ProcessId
+    Initialize-ProcessTokenReader $Context
+    $actual = [ClipPlusSetup.ProcessTokenReader]::Read($pidOfApp)
+    if ($null -eq $actual -or $actual.Image -ine $Context.Exe -or
+        $actual.Sid -ne $Context.Sid -or $actual.Started -lt $Started) { return $null }
+
+    # Only read the health marker for the independently identified token.
+    # LocalAppData is never consulted to establish an elevated process's health.
+    $data = if ($actual.Elevated) { $Context.Data } else { $Context.NormalData }
+    $path = Join-Path $data 'ready.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    Assert-NoReparsePoint $data
+    Assert-NoReparsePoint $path
+    try {
+        $file = Get-Item -LiteralPath $path
+        if ($file.LastWriteTimeUtc -lt $Started -or $file.Length -gt 4096) { return $null }
+        $ready = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($ready.pid -ne $pidOfApp) { return $null }
+    } catch {
+        # A newly started process can still be writing its health marker.
+        return $null
     }
-    return $null
+    return [pscustomobject]@{
+        pid = $pidOfApp
+        version = [Diagnostics.FileVersionInfo]::GetVersionInfo($Context.Exe).FileVersion
+        elevated = $actual.Elevated
+        elevationType = $actual.ElevationType
+    }
 }
 
 function Start-ClipPlusAndVerify($Context) {
@@ -207,7 +326,7 @@ function Start-ClipPlusAndVerify($Context) {
         if (-not $highest -and $ready.elevated) {
             # Limited means use the ordinary token. Some administrator accounts
             # do not have a split token; Limited cannot manufacture one.
-            if ($null -eq $ready.PSObject.Properties['elevationType'] -or $ready.elevationType -ne 1) {
+            if ($ready.elevationType -ne 1) {
                 throw 'Windows launched the limited task elevated despite a split or unknown token. Choose administrator startup or launch the portable app with a normal user.'
             }
             Write-Warning 'This Windows account has no separate filtered token; its ordinary token is already administrative.'

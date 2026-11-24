@@ -35,6 +35,10 @@ The CI workflow creates portable and graphical installer executables with SHA-25
 
 The installed elevated mode uses a protected, per-user directory under Program Files\ClipPlusData\<user SID>. Normal mode uses %LOCALAPPDATA%\ClipPlus. These histories are deliberately separate across privilege levels, and updates/uninstall preserve them. History is local SQLite data, not a password vault or encrypted backup. ClipPlus honors clipboard exclusion markers and keeps clipboard content out of diagnostic logs. Use the tray's Exit option to stop capture.
 
+## Third-party notices
+
+The portable executable and installed app expose **Third-party notices** in the tray menu. The build verifies the actual embedded assembly inventory against `docs/licenses/dependencies.json` and produces a readable notice text alongside both executables. Full upstream license/notice texts are maintained in [docs/licenses](docs/licenses). The application's own distribution license is a separate owner decision.
+
 ## Development
 
 - [Project specification](docs/PROJECT-SPEC.md)

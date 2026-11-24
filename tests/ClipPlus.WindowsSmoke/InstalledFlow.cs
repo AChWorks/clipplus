@@ -138,6 +138,43 @@ internal static class InstalledFlow
         }
     }
 
+    // Compare real pinned fixture metadata, original payload bytes and settings,
+    // not a sentinel file. Unpinned history can legitimately change on recapture.
+    internal static int SnapshotState(string[] args)
+    {
+        SqlitePlatform.Initialize();
+        var database = Argument(args, "--database");
+        var settings = Path.Combine(Path.GetDirectoryName(database)!, "settings.json");
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = database, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT c.id,c.fingerprint,c.title,c.color,c.pinned,c.text,c.has_image,c.has_html,f.format,f.data
+            FROM clips c JOIN formats f ON f.clip_id=c.id
+            WHERE c.title='Synthetic E2E title'
+            ORDER BY c.id,f.format
+            """;
+        using var reader = command.ExecuteReader();
+        var snapshot = new System.Text.StringBuilder();
+        var count = 0;
+        while (reader.Read())
+        {
+            if (reader.GetInt32(3) != (int)ClipColor.Green || !reader.GetBoolean(4) ||
+                !reader.GetString(5).StartsWith("ClipPlus E2E ", StringComparison.Ordinal))
+                throw new InvalidOperationException("Pinned synthetic fixture metadata changed.");
+            count++;
+            for (var i = 0; i < 9; i++)
+                snapshot.Append(Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture)).Append('|');
+            snapshot.AppendLine(Convert.ToBase64String((byte[])reader.GetValue(9)));
+        }
+        if (count == 0) throw new InvalidOperationException("Synthetic pinned clip and payload are missing.");
+        snapshot.AppendLine(File.ReadAllText(settings));
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        Console.WriteLine(BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(snapshot.ToString()))).Replace("-", ""));
+        return 0;
+    }
+
     private sealed record Metadata(string Title, ClipColor Color, bool Pinned);
 
     private static Metadata? FindMetadata(string path, string text)

@@ -138,6 +138,8 @@ internal static class Native
     internal static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")]
     internal static extern nint MonitorFromPoint(Point point, uint flags);
+    [DllImport("user32.dll")]
+    internal static extern nint MonitorFromRect(ref Rect rect, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetMonitorInfo(nint monitor, ref MonitorInfo info);

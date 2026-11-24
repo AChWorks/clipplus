@@ -113,6 +113,11 @@ public partial class App : Application
         menu.Items.Add(new Forms.ToolStripSeparator());
         var elevated = StateDirectory.Elevated;
         menu.Items.Add(new Forms.ToolStripMenuItem(elevated ? "Running as Administrator" : "Running normally") { Enabled = false });
+        menu.Items.Add("Third-party notices", null, (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try { ThirdPartyNotices.Show(); }
+            catch (Exception ex) { Report("Could not display third-party notices.", ex); }
+        })));
         menu.Items.Add(new Forms.ToolStripMenuItem("ClipPlus " + typeof(App).Assembly.GetName().Version) { Enabled = false });
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Dispatcher.BeginInvoke(new Action(() => Shutdown())));
@@ -321,6 +326,7 @@ public partial class App : Application
             }
             Native.PasteKeys();
         }
+        catch (ClipboardRestoreException ex) { Report(ex.Message + " No paste was sent.", ex); }
         catch (Exception ex) { Report("Could not complete paste. Check the target application and clipboard.", ex); }
         finally { _pasting = false; }
     }

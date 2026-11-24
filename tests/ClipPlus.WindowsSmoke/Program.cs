@@ -29,6 +29,8 @@ internal static class Program
             return 0;
         }
 
+        if (args.Contains("--snapshot-state"))
+            return InstalledFlow.SnapshotState(args);
         if (args.Contains("--installed-flow"))
             return InstalledFlow.Run(args);
 
@@ -76,6 +78,29 @@ internal static class Program
             Check(captured.Formats[ClipFormat.Png].AsSpan(0, png.Length).SequenceEqual(png), "PNG bytes preserved");
             Check(captured.Formats[ClipFormat.NoCloudUpload].SequenceEqual(new byte[4]), "cloud exclusion preserved");
             Check(ImagePreview.Decode(captured) is not null, "image preview decoded");
+
+            var cloudFormat = Native.RegisterClipboardFormat("CanUploadToCloudClipboard");
+            foreach (var failAt in new[] { 1, 3 })
+            {
+                var published = new List<uint>();
+                try
+                {
+                    Retry(() => sender.Restore(payload, (format, memory) =>
+                    {
+                        published.Add(format);
+                        return published.Count == failAt ? IntPtr.Zero : Native.SetClipboardData(format, memory);
+                    }));
+                    throw new InvalidOperationException("Injected clipboard publication failure was ignored.");
+                }
+                catch (ClipboardRestoreException) { }
+                Check(published.Count == failAt && published[0] == cloudFormat,
+                    $"privacy marker precedes all content (failure at write {failAt})");
+                Check(!Native.IsClipboardFormatAvailable(13) &&
+                      !Native.IsClipboardFormatAvailable(Native.RegisterClipboardFormat("HTML Format")) &&
+                      !Native.IsClipboardFormatAvailable(Native.RegisterClipboardFormat("PNG")),
+                    $"failed restoration cleared partial content (write {failAt})");
+            }
+
 
             Retry(() => receiver.Restore(payload));
             Retry(() => captured = receiver.Capture().Payload);
@@ -152,6 +177,22 @@ internal static class Program
                     $"{color} accent is visibly distinct");
             }
             Check(visibleColors.Count == 8, "All eight visible palette accents are distinct");
+            var notices = ThirdPartyNotices.Read();
+            Check(notices.Contains("Microsoft.Data.Sqlite.Core 10.0.15") &&
+                  notices.Contains("SQLitePCLRaw.core 2.1.13") &&
+                  notices.Contains("Costura.Fody 6.2.0") &&
+                  notices.Contains("Apache License") && notices.Contains("Simon Cropp") &&
+                  notices.Contains("Inno Setup License"), "readable embedded third-party notices");
+            var small = new Native.Rect { Left = -1280, Top = 0, Right = 0, Bottom = 720 };
+            var anchor = new Native.Point { X = -20, Y = 700 };
+            var fit = PopupWindow.FitBounds(small, 1.5, anchor, 650, false);
+            Check(fit.Left >= small.Left && fit.Top >= small.Top && fit.Right <= small.Right &&
+                  fit.Bottom <= small.Bottom && fit.Bottom - fit.Top == 720,
+                "smaller high-DPI destination clamps manual bounds");
+            var large = new Native.Rect { Left = 0, Top = 0, Right = 1920, Bottom = 1080 };
+            fit = PopupWindow.FitBounds(large, 1, new Native.Point { X = 1900, Y = 1000 }, 650, false);
+            Check(fit.Right == large.Right && fit.Bottom == large.Bottom && fit.Bottom - fit.Top == 650,
+                "larger destination restores preferred height");
             popup.HidePopup();
             popup.Close();
             Console.WriteLine("Windows smoke checks completed; physical hotkey, interactive paste, elevation, resize and lifecycle still require desktop acceptance.");
