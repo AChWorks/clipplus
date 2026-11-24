@@ -9,6 +9,7 @@ internal static class Native
     internal const int WmClipboardUpdate = 0x031D;
     internal const int WmHotkey = 0x0312;
     internal const int WmOpenPopup = 0x8001;
+    internal const int WmShortcutFault = 0x8002;
     internal const int VkV = 0x56;
     internal const int VkControl = 0x11, VkShift = 0x10, VkAlt = 0x12;
     internal const int VkLWin = 0x5B, VkRWin = 0x5C;
@@ -59,6 +60,8 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool UnregisterHotKey(nint hwnd, int id);
+    [DllImport("user32.dll")]
+    internal static extern uint MapVirtualKey(uint code, uint mapType);
     [DllImport("user32.dll")]
     internal static extern short GetAsyncKeyState(int key);
     internal static bool Down(int key) => (GetAsyncKeyState(key) & 0x8000) != 0;
@@ -201,10 +204,11 @@ internal static class Native
     // PowerToys uses the reserved 0xFF virtual key as a down/up pair to mark
     // the modifier chord without typing a character or releasing Win early:
     // https://microsoft.github.io/PowerToys/modules/keyboardmanager/keyboardmanager/
-    internal static bool MarkWinChord()
+    internal static bool MarkWinChord(out int error)
     {
         Input[] inputs = [Key(0xFF), Key(0xFF, true)];
         var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+        error = sent == inputs.Length ? 0 : Marshal.GetLastWin32Error();
         if (sent == inputs.Length) return true;
         if (sent == 1) SendInput(1, [Key(0xFF, true)], Marshal.SizeOf<Input>());
         return false;

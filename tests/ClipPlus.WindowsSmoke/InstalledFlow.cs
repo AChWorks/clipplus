@@ -168,7 +168,7 @@ internal static class InstalledFlow
         return args[index + 1];
     }
 
-    private static void SendShortcut(Shortcut shortcut)
+    internal static void SendShortcut(Shortcut shortcut)
     {
         var modifiers = shortcut switch
         {
@@ -291,7 +291,12 @@ internal static class InstalledFlow
     private static Native.Input KeyInput(ushort key, bool up = false) => new()
     {
         Type = 1,
-        Data = new Native.InputData { Keyboard = new Native.KeyboardInput { VirtualKey = key, Flags = up ? 2u : 0 } }
+        Data = new Native.InputData { Keyboard = new Native.KeyboardInput
+        {
+            VirtualKey = key,
+            Scan = (ushort)Native.MapVirtualKey(key, 0),
+            Flags = (up ? 2u : 0) | (key is Native.VkLWin or Native.VkRWin ? 1u : 0)
+        } }
     };
 
     private static void SendKeys(params Native.Input[] keys)

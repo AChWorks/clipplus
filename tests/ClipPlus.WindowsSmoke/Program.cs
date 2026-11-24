@@ -35,9 +35,13 @@ internal static class Program
         var sender = new WindowsClipboard(first.Handle);
         var receiver = new WindowsClipboard(second.Handle);
         var notifications = 0;
+        var shortcutRequests = 0;
+        int? shortcutFault = null;
         second.AddHook((nint hwnd, int message, nint wParam, nint lParam, ref bool handled) =>
         {
             if (message == Native.WmClipboardUpdate) { notifications++; handled = true; }
+            if (message == Native.WmOpenPopup) { shortcutRequests++; handled = true; }
+            if (message == Native.WmShortcutFault) { shortcutFault = (int)wParam; handled = true; }
             return 0;
         });
         if (!Native.AddClipboardFormatListener(second.Handle)) throw Native.Error("Smoke clipboard listener");
@@ -99,6 +103,22 @@ internal static class Program
                 () => new Preferences());
             popup.ShowAt(Native.Anchor(Native.GetForegroundWindow()));
             popup.UpdateLayout();
+            // Exercise the reserved-shortcut fallback explicitly even when
+            // the CI server allows RegisterHotKey(Win+V).
+            using (var hook = new ShortcutManager(second.Handle))
+            {
+                hook.StartWinHook();
+                Check(hook.Mechanism == "KeyboardHook", "Win+V hook installed");
+                var foreground = Native.GetForegroundWindow();
+                InstalledFlow.SendShortcut(Shortcut.WinV);
+                PumpUntil(() => shortcutRequests > 0 || shortcutFault.HasValue);
+                Check(!shortcutFault.HasValue, $"Win+V dummy event accepted (error={shortcutFault})");
+                Check(shortcutRequests == 1, "Win+V hook consumed chord and posted exactly once");
+                PumpUntil(() => false, TimeSpan.FromMilliseconds(650));
+                Check(Native.GetForegroundWindow() == foreground && !Native.ModifiersDown,
+                    "Win+V fallback did not open Start or leave modifiers pressed");
+            }
+
             var list = (System.Windows.Controls.ListBox)popup.FindName("ClipList");
             var search = (System.Windows.Controls.TextBox)popup.FindName("SearchBox");
             Check(list.Items.Count == 1, "WPF history populated");
@@ -148,11 +168,11 @@ internal static class Program
         }
     }
 
-    private static void PumpUntil(Func<bool> done)
+    private static void PumpUntil(Func<bool> done, TimeSpan? timeout = null)
     {
         if (done()) return;
         var frame = new DispatcherFrame();
-        var deadline = DateTime.UtcNow.AddSeconds(3);
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(3));
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(25) };
         timer.Tick += (_, _) =>
         {

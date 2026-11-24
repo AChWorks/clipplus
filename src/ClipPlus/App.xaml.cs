@@ -70,7 +70,9 @@ public partial class App : Application
             {
                 pid = Environment.ProcessId,
                 version = typeof(App).Assembly.GetName().Version?.ToString(),
-                elevated = StateDirectory.Elevated
+                elevated = StateDirectory.Elevated,
+                shortcut = _preferences.Shortcut.ToString(),
+                shortcutMechanism = _shortcut.Mechanism
             }));
             _ready = true;
         }
@@ -180,6 +182,13 @@ public partial class App : Application
         if (message == Native.WmClipboardUpdate)
         {
             QueueCapture();
+            handled = true;
+        }
+        else if (message == Native.WmShortcutFault)
+        {
+            var error = (int)wParam;
+            Dispatcher.BeginInvoke(() => Report("Win+V could not be intercepted. Native shortcut was left unchanged.",
+                new Win32Exception(error, "Mark Win+V modifier chord")));
             handled = true;
         }
         else if ((message == Native.WmHotkey && wParam == 1) || message == Native.WmOpenPopup)

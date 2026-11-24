@@ -24,6 +24,9 @@ try {
     }
     & (Join-Path $directory 'Install.ps1')
     $installed = $true
+    $readyPath = Join-Path $context.Data 'ready.json'
+    $ready = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
+    Write-Host "Shortcut: $($ready.shortcut) via $($ready.shortcutMechanism)"
     if ($StartupOnly) {
         Write-Host 'PASS: alternate distribution started as Administrator.'
         return
@@ -32,7 +35,6 @@ try {
     $database = Join-Path $context.Data 'history.db'
     dotnet run --project $testProject -c Release --no-build -- --isolated-desktop --installed-flow --shortcut WinV --database $database
     if ($LASTEXITCODE -ne 0) { throw "Installed interactive workflow failed ($LASTEXITCODE)." }
-    $readyPath = Join-Path $context.Data 'ready.json'
     $firstReady = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
     $settings = Join-Path $context.Data 'settings.json'
     $savedPosition = (Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json).WindowPosition
@@ -67,6 +69,12 @@ try {
     $installed = $false
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Uninstall removed durable state.' }
     Write-Host 'PASS: uninstall removed app/task and preserved state.'
+} catch {
+    if ($installed) {
+        $diagnostics = Join-Path $context.Data 'diagnostics.log'
+        if (Test-Path -LiteralPath $diagnostics) { Get-Content -LiteralPath $diagnostics -Tail 30 | Write-Host }
+    }
+    throw
 } finally {
     try {
         if ($installed) { & (Join-Path $directory 'Uninstall.ps1') }
