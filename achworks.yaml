@@ -6,13 +6,13 @@ metadata:
   description: Minimal native Windows clipboard history manager.
 spec:
   type: desktop-application
-  lifecycle: development
+  lifecycle: active
   system: clipplus
   ownership: AChWorks
   technology:
     languages: [CSharp, PowerShell]
     frameworks: [WPF]
-    runtimes: [dotnet]
+    runtimes: [dotnet-framework]
   documentation:
     path: docs/
   source:

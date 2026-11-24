@@ -1,50 +1,75 @@
 # ClipPlus
 
-A minimal, native Windows clipboard history manager: the familiar Copy/Paste workflow with search, editable titles, colors, a persistent popup position and height, and pinned-first history.
+A lightweight Windows clipboard history manager that keeps the familiar Win+V workflow and adds search, editable titles, pins, colors and persistent popup geometry.
 
-**Status:** Initial implementation in development. Exact-candidate validation and independent review are required before a stable release.
-
-## Features
-
-- Win+V, with alternate shortcuts available from the tray. Opening ClipPlus does not open Start.
-- Search titles and copied text; real title matches rank first, then content matches. Within each tier, pinned items precede recent items. Arrow keys to navigate, Enter or a click on the preview to paste, Esc to close.
-- Keep 50 recent unpinned clips plus all pinned clips, ordered pinned-first when not searching.
-- Click a title (including No Title) to edit it; Enter saves, Esc cancels.
-- Hover or click the color swatch beside Pin to pick one of eight preset colors or Default.
-- Drag the header to move the popup; drag the top or bottom edge to resize. Position and height survive restart. Use Reset popup position in the tray to return to contextual placement.
-- Retain text, HTML and native image payloads; no network service, account or sync.
+[Download installer](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus-Setup.exe) · [Download portable](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus.exe) · [Releases and checksums](https://github.com/AChWorks/clipplus/releases/latest)
 
 ## Download and install
 
-- **ClipPlus.exe**: portable single executable. Exit any existing ClipPlus instance from the tray, then launch directly. Run as administrator when you need to paste into elevated applications.
-- **ClipPlus-Setup.exe**: graphical Windows installation. Next, choose whether to run as administrator, Install, Finish. It starts at logon in the chosen mode (normal uses the account's ordinary Windows token; accounts without a filtered token may already be administrators), provides an account-specific Start menu shortcut (ClipPlus followed by the account SID), and registers in Settings > Apps > Installed apps. Run Setup again to update; history and settings are preserved. Uninstall from Installed apps.
+ClipPlus targets Windows 10 and 11. It uses the Windows-provided .NET Framework 4.7.2 or later and SQLite engine (winsqlite3.dll). Both are normally available on modern Windows installations; older systems may need the corresponding Windows components updated. No separately installed modern .NET Desktop Runtime is needed. See [Microsoft's Framework version table](https://learn.microsoft.com/dotnet/framework/install/versions-and-dependencies) and the release's documented validation scope.
 
-If setup was interrupted by a crash or shutdown, run the trusted ClipPlus-Setup.exe again as the same administrator account. Setup recovers the interrupted transaction before offering installation; you can then continue updating or close the wizard and uninstall normally. If the journal or backup is inconsistent, preserve the reported transaction directory and resolve the specific error before retrying. Do not delete the backup or history manually. When switching from an earlier pre-release test installer with a shared shortcut, uninstall that test build first (history and settings remain), then install the new candidate.
+| Download | How to use |
+| --- | --- |
+| [ClipPlus-Setup.exe](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus-Setup.exe) | Recommended. Run the graphical installer as the intended logged-in administrator. Choose automatic startup with administrator privileges (default) or ordinary account privileges, then complete the wizard. |
+| [ClipPlus.exe](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus.exe) | Portable single executable, no installation or sidecar files. Exit any running ClipPlus instance first, then launch it. Use Run as administrator when you need to paste into elevated applications. |
 
-No separately installed modern .NET Desktop Runtime is required. ClipPlus uses the Windows .NET Framework 4.7.2 or later and Windows-provided SQLite, both normally present on modern Windows 10 and Windows 11. Older Windows installations may need the OS component enabled/updated; see [Microsoft's version table](https://learn.microsoft.com/dotnet/framework/install/versions-and-dependencies). Actual runtime acceptance on every Windows edition and architecture is not claimed.
+The installer registers ClipPlus in Windows Installed Apps and creates an account-specific Start menu shortcut. It configures an interactive per-user startup task, not a Windows service. Normal startup uses the account's ordinary Windows token, which may already be administrative on an account without a filtered token.
 
-## Build and test
+Publisher metadata identifies AChWorks. The initial release is unsigned, so Windows may display Unknown publisher or SmartScreen warnings. Verify the executable against its accompanying SHA-256 file from the [official release](https://github.com/AChWorks/clipplus/releases/latest); metadata alone does not authenticate the publisher. Do not disable UAC or SmartScreen.
 
-Use .NET 10 SDK (build/test tooling only), PowerShell 7 and Inno Setup 6 on Windows.
+## Using ClipPlus
 
-    dotnet test tests/ClipPlus.Tests/ClipPlus.Tests.csproj -c Release
-    dotnet build tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release
-    pwsh -File scripts/Build-Package.ps1
+| Action | Control |
+| --- | --- |
+| Open or dismiss history | Win+V; Esc closes the popup |
+| Alternate shortcut | Tray > Shortcut: Ctrl+Shift+V or Ctrl+Alt+V |
+| Search | Type a title or copied text; real title matches rank first |
+| Navigate and paste | Up/Down and Enter, or select and click the clip preview |
+| Edit a title | Click the title or No Title; Enter saves, Esc cancels |
+| Organize clips | Pin, unpin, delete or choose one of eight colors or Default from the color swatch |
+| Clear history | Clear removes recent unpinned items and keeps pins |
+| Move or resize | Drag the header or top/bottom edge; position and height persist |
+| Restore contextual position | Tray > Reset popup position |
 
-The CI workflow creates portable and graphical installer executables with SHA-256 digests. The isolated Windows lifecycle smoke runs the exact bare portable executable, installs/updates/uninstalls the graphical package, verifies startup and clipboard behavior. CI artifacts are test candidates, not stable releases.
+ClipPlus keeps 50 recent unpinned clips plus all pinned clips, deduplicates equivalent copies without losing their metadata, and retains Unicode text, HTML and relevant native image formats. The popup follows the system light/dark appearance, with a slim Windows-style scrollbar for overflowing history.
+
+## Update, uninstall and recovery
+
+- **Update:** run the new trusted Setup executable under the same account. History and preferences are preserved. When switching from an early pre-release test installer with a shared Start menu shortcut, uninstall that test build first, then install the stable version; this preserves history and settings.
+- **Uninstall:** use Windows Installed Apps (Apps & features on Windows 10). ClipPlus removes its owned installation, task, shortcut and registration; retained history and preferences are not purged.
+- **Interrupted installation:** run the trusted Setup again as the same administrator account. It recovers interrupted installation or rollback before continuing. If recovery reports inconsistent protected state, preserve the indicated transaction directory and correct the reported error before retrying. Do not delete the backup or history manually.
 
 ## Local data and privacy
 
-The installed elevated mode uses a protected, per-user directory under Program Files\ClipPlusData\<user SID>. Normal mode uses %LOCALAPPDATA%\ClipPlus. These histories are deliberately separate across privilege levels, and updates/uninstall preserve them. History is local SQLite data, not a password vault or encrypted backup. ClipPlus honors clipboard exclusion markers and keeps clipboard content out of diagnostic logs. Use the tray's Exit option to stop capture.
+| Execution mode | Data directory |
+| --- | --- |
+| Normal | `%LOCALAPPDATA%\ClipPlus` |
+| Administrator | Protected per-user directory under `%ProgramFiles%\ClipPlusData\<user SID>` |
 
-## License and publisher
+Clipboard history is stored in local SQLite; preferences use JSON. Normal and elevated histories are deliberately separate. History is not application-encrypted and should not be treated as a password vault or encrypted backup. ClipPlus honors clipboard exclusion markers and keeps clipboard payloads out of diagnostics. No account, network service, telemetry or cloud synchronization is required. Exit from the tray to stop capture.
 
-ClipPlus first-party code is licensed under the [Mozilla Public License 2.0](LICENSE). Source code for each release is available from its corresponding Git tag and GitHub release source archive. The portable executable and installed app expose **License and notices** in the tray menu. The build verifies the actual embedded assembly inventory and includes the full first-party license and third-party notices in the application and release artifacts. Upstream notices retain their original terms; see [docs/licenses](docs/licenses).
+For troubleshooting, inspect `diagnostics.log` in the active mode's data directory. When reporting an issue, include the version, Windows build, execution mode, reproduction steps and relevant diagnostics without sharing actual clipboard content or credentials.
 
-Publisher metadata identifies AChWorks. Until publicly trusted Authenticode signing is available, the executables are unsigned and Windows may display Unknown publisher or SmartScreen warnings. Verify official GitHub release SHA-256 checksums; metadata alone is not publisher authentication. Do not disable UAC or SmartScreen. Compatibility evidence and untested environments are documented in the [Windows acceptance checklist](docs/WINDOWS-ACCEPTANCE.md).
+## Build and test
 
-## Development
+Development requires the .NET 10 SDK, PowerShell 7 and Inno Setup 6 on Windows. These are build tools, not user runtime requirements.
+
+```powershell
+dotnet test tests/ClipPlus.Tests/ClipPlus.Tests.csproj -c Release
+dotnet build tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release
+pwsh -File scripts/Build-Package.ps1
+```
+
+The package script produces both executables, SHA-256 files, the project license and third-party notices in `artifacts/`. GitHub Actions exercises the portable executable, native clipboard and UI interactions, installation, updates, rollback/recovery and uninstall on an isolated Windows runner. CI artifacts are test candidates; official downloads come from [Releases](https://github.com/AChWorks/clipplus/releases).
+
+Validation covers the available Windows Server CI environment and representative hands-on testing. It does not establish complete compatibility with every Windows 10/11 client edition, older Framework version, privilege configuration or mixed-DPI desktop. See the [release notes](https://github.com/AChWorks/clipplus/releases/latest) and [Windows acceptance checklist](docs/WINDOWS-ACCEPTANCE.md) for the precise evidence boundary.
+
+## License and development
+
+ClipPlus is developed by AChWorks and licensed under [MPL-2.0](LICENSE). Corresponding first-party source is available at each release tag and in GitHub's source archives. The portable and installed application provide the complete license and third-party notices in the tray's License and notices menu; the same notices accompany the release assets.
 
 - [Project specification](docs/PROJECT-SPEC.md)
 - [Windows acceptance checklist](docs/WINDOWS-ACCEPTANCE.md)
-- [Work tracking](https://github.com/AChWorks/clipplus/issues)
+- [Third-party licenses and dependency inventory](docs/licenses/)
+- [Build and test workflow](.github/workflows/ci.yml)
+- [Report an issue](https://github.com/AChWorks/clipplus/issues)
