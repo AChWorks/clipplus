@@ -14,31 +14,22 @@ A minimal, native Windows clipboard history manager: the familiar Copy/Paste wor
 - Drag the header to move the popup; drag the top or bottom edge to resize. Position and height survive restart. Use Reset popup position in the tray to return to contextual placement.
 - Retain text, HTML and native image payloads; no network service, account or sync.
 
+## Download and install
+
+- **ClipPlus.exe**: portable single executable. Exit any existing ClipPlus instance from the tray, then launch directly. Run as administrator when you need to paste into elevated applications.
+- **ClipPlus-Setup.exe**: graphical Windows installation. Next, choose whether to run as administrator, Install, Finish. It starts at logon in the chosen mode, provides a Start menu shortcut, and registers in Settings > Apps > Installed apps. Run Setup again to update; history and settings are preserved. Uninstall from Installed apps.
+
+No separately installed modern .NET Desktop Runtime is required. ClipPlus uses the Windows .NET Framework 4.7.2 or later and Windows-provided SQLite, both normally present on modern Windows 10 and Windows 11. Older Windows installations may need the OS component enabled/updated; see [Microsoft's version table](https://learn.microsoft.com/dotnet/framework/install/versions-and-dependencies). Actual runtime acceptance on every Windows edition and architecture is not claimed.
+
 ## Build and test
 
-Use .NET 10 SDK and PowerShell 7 on Windows. The application targets WPF/Win32 and needs an interactive Windows desktop to run. Check current [.NET Windows support](https://learn.microsoft.com/dotnet/core/install/windows).
+Use .NET 10 SDK (build/test tooling only), PowerShell 7 and Inno Setup 6 on Windows.
 
     dotnet test tests/ClipPlus.Tests/ClipPlus.Tests.csproj -c Release
-    dotnet build src/ClipPlus/ClipPlus.csproj -c Release
-    pwsh -File scripts/Build-Package.ps1 -Runtime win-x64
+    dotnet build tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release
+    pwsh -File scripts/Build-Package.ps1
 
-The default lightweight package contains a single app executable and setup scripts. It uses Windows' built-in SQLite and requires the machine-wide .NET 10 Desktop Runtime. Install the appropriate architecture from https://dotnet.microsoft.com/download/dotnet/10.0 if needed. For a larger package without a separate .NET installation, build with:
-
-    pwsh -File scripts/Build-Package.ps1 -Runtime win-x64 -SelfContained
-
-The build supports win-x64, win-x86 and win-arm64; CI runtime acceptance uses x64. The Windows 10/11 target is subject to Microsoft's supported .NET/runtime combinations and real desktop testing; older Windows 10 editions are not claimed as verified. The CI workflow produces lightweight and optional self-contained x64 test packages and their SHA-256 digests. A green build is not proof of interactive behavior. Do not treat CI artifacts as stable releases.
-
-## Install, update and remove
-
-Extract a trusted package to a directory, verify the archive digest, and close any separately running ClipPlus instance. In an elevated Windows PowerShell opened by the intended logged-in administrator account, run:
-
-    powershell.exe -NoProfile -File .\Install.ps1
-
-The installer checks the package file manifest, stages the application in Program Files, and creates a per-user interactive logon task with highest privileges. It verifies a startup readiness marker from the new process and attempts rollback on activation failure. Install a newer package using the same command. The uninstaller removes the installed app and its task, not history or preferences:
-
-    powershell.exe -NoProfile -File .\Uninstall.ps1
-
-To try without installation or elevation, run app\ClipPlus.exe from the extracted package. Normal mode cannot reliably paste into elevated applications. Exit from the tray before switching modes.
+The CI workflow creates portable and graphical installer executables with SHA-256 digests. The isolated Windows lifecycle smoke runs the exact bare portable executable, installs/updates/uninstalls the graphical package, verifies startup and clipboard behavior. CI artifacts are test candidates, not stable releases.
 
 ## Local data and privacy
 

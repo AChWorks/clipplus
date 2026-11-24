@@ -6,3 +6,5 @@ TestResults/
 .vs/
 *.user
 *.suo
+
+**/FodyWeavers.xsd

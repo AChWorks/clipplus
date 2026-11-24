@@ -1,11 +1,6 @@
 #Requires -Version 7.0
 [CmdletBinding()]
-param(
-    [ValidateSet('win-x64','win-arm64','win-x86')]
-    [string]$Runtime = 'win-x64',
-    [string]$OutputDirectory = '',
-    [switch]$SelfContained
-)
+param([string]$OutputDirectory = '')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent $PSScriptRoot
@@ -13,45 +8,40 @@ if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root 'artifacts' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $stage = Join-Path $OutputDirectory ("package-" + [Guid]::NewGuid().ToString('N'))
-$app = Join-Path $stage 'app'
+$build = Join-Path $stage 'build'
+$payload = Join-Path $stage 'payload'
+$app = Join-Path $payload 'app'
 New-Item -ItemType Directory -Path $app -Force | Out-Null
 try {
     $project = Join-Path $root 'src/ClipPlus/ClipPlus.csproj'
     [xml]$xml = Get-Content -LiteralPath $project -Raw
     $version = [string]$xml.Project.PropertyGroup.Version
-    $target = [string]$xml.Project.PropertyGroup.TargetFramework
-    if ($target -notmatch '^net(\d+\.\d+)-windows') { throw "Unexpected target framework: $target" }
-    $desktopRuntime = $Matches[1]
-    $publish = @('publish', $project, '-c', 'Release', '-r', $Runtime, '-o', $app,
-        '--nologo', '-p:DebugType=None', '-p:DebugSymbols=false')
-    if ($SelfContained) {
-        # Use only the runtime shipped alongside the protected executable.
-        $publish += @('--self-contained', 'true', '-p:AppHostDotNetSearch=AppLocal')
-    } else {
-        # All native dependencies come from Windows. Keep one executable and
-        # use the machine-wide Desktop Runtime; no user-temp DLL extraction.
-        $publish += @('--self-contained', 'false', '-p:PublishSingleFile=true')
+    dotnet build $project -c Release -p:EmbedDependencies=true -p:DebugType=None -p:DebugSymbols=false -o $build --nologo
+    if ($LASTEXITCODE -ne 0) { throw "dotnet build failed ($LASTEXITCODE)." }
+    # The test deliberately launches the exact executable alone to prove that
+    # neither a .config file nor the original managed dependency files are required.
+    Copy-Item -LiteralPath (Join-Path $build 'ClipPlus.exe') -Destination $app
+    $exe = Join-Path $app 'ClipPlus.exe'
+    @{ product='AChWorks.ClipPlus'; version=$version; rid='windows-anycpu'; files=@(
+        @{ path='ClipPlus.exe'; sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash }
+    ) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $payload 'manifest.json') -Encoding utf8NoBOM
+    foreach ($name in @('Install.ps1','Uninstall.ps1','Setup.Common.ps1','Invoke-Setup.ps1')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $payload
     }
-    dotnet @publish
-    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
-    $files = @(Get-ChildItem -LiteralPath $app -File -Recurse | Sort-Object FullName | ForEach-Object {
-        @{
-            path = $_.FullName.Substring($app.Length + 1).Replace('\','/')
-            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
-        }
-    })
-    @{ product='AChWorks.ClipPlus'; version=$version; rid=$Runtime; files=$files;
-       selfContained=[bool]$SelfContained; desktopRuntime=$desktopRuntime } |
-        ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stage 'manifest.json') -Encoding utf8NoBOM
-    foreach ($name in @('Install.ps1','Uninstall.ps1','Setup.Common.ps1')) {
-        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $stage
+    $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    $iscc = if ($compiler) { $compiler.Source } else {
+        Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)) 'Inno Setup 6\ISCC.exe'
     }
-    $name = if ($SelfContained) { "ClipPlus-$Runtime-self-contained.zip" } else { "ClipPlus-$Runtime.zip" }
-    $archive = Join-Path $OutputDirectory $name
-    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force
-    $digest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-    "$digest  $name" | Set-Content -LiteralPath "$archive.sha256" -Encoding ascii
-    Write-Host "Package: $archive ($((Get-Item -LiteralPath $archive).Length) bytes)"
+    if (-not (Test-Path -LiteralPath $iscc)) { throw 'Inno Setup 6 compiler is required on the build machine.' }
+    & $iscc "/DPayloadDir=$payload" "/DAppVersion=$version" "/DOutputDir=$OutputDirectory" (Join-Path $root 'installer/ClipPlus.iss')
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed ($LASTEXITCODE)." }
+    Copy-Item -LiteralPath $exe -Destination (Join-Path $OutputDirectory 'ClipPlus.exe') -Force
+    foreach ($name in @('ClipPlus.exe','ClipPlus-Setup.exe')) {
+        $file = Join-Path $OutputDirectory $name
+        $digest = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$digest  $name" | Set-Content -LiteralPath "$file.sha256" -Encoding ascii
+        Write-Host "$name ($((Get-Item -LiteralPath $file).Length) bytes)"
+    }
 } finally {
     Remove-Item -LiteralPath $stage -Recurse -Force
 }

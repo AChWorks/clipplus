@@ -13,9 +13,11 @@ public sealed class ClipPayload
 
     public ClipPayload(IEnumerable<KeyValuePair<ClipFormat, byte[]>> formats)
     {
-        foreach (var (format, bytes) in formats)
+        foreach (var pair in formats)
         {
-            if (!Enum.IsDefined(format) || bytes.Length == 0)
+            var format = pair.Key;
+            var bytes = pair.Value;
+            if (!Enum.IsDefined(typeof(ClipFormat), format) || bytes.Length == 0)
                 continue;
             _formats[format] = Normalize(format, bytes);
         }
@@ -27,21 +29,23 @@ public sealed class ClipPayload
     public bool HasImage => _formats.ContainsKey(ClipFormat.Png) ||
         _formats.ContainsKey(ClipFormat.Dib) || _formats.ContainsKey(ClipFormat.DibV5);
     public string Text => _formats.TryGetValue(ClipFormat.UnicodeText, out var text)
-        ? Encoding.Unicode.GetString(text.AsSpan(0, text.Length - 2)) : "";
+        ? Encoding.Unicode.GetString(text, 0, text.Length - 2) : "";
     public bool HasHtml => _formats.ContainsKey(ClipFormat.Html);
 
     public string Fingerprint()
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> header = stackalloc byte[8];
-        foreach (var (format, bytes) in _formats)
+        var header = new byte[8];
+        foreach (var pair in _formats)
         {
+            var format = pair.Key;
+            var bytes = pair.Value;
             BinaryPrimitives.WriteInt32LittleEndian(header, (int)format);
-            BinaryPrimitives.WriteInt32LittleEndian(header[4..], bytes.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(4), bytes.Length);
             hash.AppendData(header);
             hash.AppendData(bytes);
         }
-        return Convert.ToHexString(hash.GetHashAndReset());
+        return BitConverter.ToString(hash.GetHashAndReset()).Replace("-", "");
     }
 
     // GlobalAlloc may round up the requested memory size. Text formats end at
@@ -82,7 +86,7 @@ public sealed record ClipItem(long Id, string Title, ClipColor Color, bool Pinne
     string Text, bool HasImage, bool HasHtml)
 {
     public bool TitleMatches(string query) => !string.IsNullOrWhiteSpace(query) &&
-        Title.Length > 0 && Title.Contains(query, StringComparison.OrdinalIgnoreCase);
+        Title.Length > 0 && Title.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
     public string DisplayTitle => string.IsNullOrEmpty(Title) ? "No Title" : Title;
     public string Preview => !string.IsNullOrEmpty(Text) ? Text :
         HasImage ? "Image" : HasHtml ? "HTML content" : "Empty text";

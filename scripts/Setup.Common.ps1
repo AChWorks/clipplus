@@ -21,6 +21,7 @@ function Get-ClipPlusContext {
         Install = $install
         Exe = Join-Path $install 'ClipPlus.exe'
         Data = Join-Path (Join-Path $programFiles 'ClipPlusData') $sid
+        NormalData = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'ClipPlus'
         Task = "ClipPlus-$sid"
     }
 }
@@ -131,10 +132,11 @@ function Stop-ClipPlus($Context) {
     throw 'The existing ClipPlus process did not stop. Close it from the tray and retry.'
 }
 
-function Register-ClipPlusTask($Context) {
+function Register-ClipPlusTask($Context, [switch]$NormalStartup) {
     $action = New-ScheduledTaskAction -Execute $Context.Exe -Argument '--startup' -WorkingDirectory $Context.Install
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Context.User
-    $principal = New-ScheduledTaskPrincipal -UserId $Context.User -LogonType Interactive -RunLevel Highest
+    $level = if ($NormalStartup) { "Limited" } else { "Highest" }
+    $principal = New-ScheduledTaskPrincipal -UserId $Context.User -LogonType Interactive -RunLevel $level
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
     $arguments = @{
         TaskName = $Context.Task
@@ -148,15 +150,19 @@ function Register-ClipPlusTask($Context) {
     }
     Register-ScheduledTask @arguments | Out-Null
     $task = Get-OwnedTask $Context
-    if ($null -eq $task -or $task.Principal.RunLevel -ne 'Highest' -or $task.Principal.LogonType -ne 'Interactive') {
-        throw 'Task Scheduler did not register the expected interactive elevated task.'
+    if ($null -eq $task -or $task.Principal.RunLevel -ne $level -or $task.Principal.LogonType -ne 'Interactive') {
+        throw 'Task Scheduler did not register the expected interactive task.'
     }
 }
 
 function Start-ClipPlusAndVerify($Context) {
+    $task = Get-OwnedTask $Context
+    if ($null -eq $task) { throw 'ClipPlus startup task is missing.' }
+    $elevated = $task.Principal.RunLevel -eq 'Highest'
+    $data = if ($elevated) { $Context.Data } else { $Context.NormalData }
     $started = [DateTime]::UtcNow
     Start-ScheduledTask -TaskName $Context.Task -TaskPath '\'
-    $readyPath = Join-Path $Context.Data 'ready.json'
+    $readyPath = Join-Path $data 'ready.json'
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 250
         $processes = @(Get-OwnedProcesses $Context)
@@ -166,8 +172,8 @@ function Start-ClipPlusAndVerify($Context) {
             $file = Get-Item -LiteralPath $readyPath
             $ready = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
             if ($file.LastWriteTimeUtc -ge $started -and $ready.pid -eq $processes[0].ProcessId -and
-                $ready.elevated -eq $true) {
-                Write-Host "ClipPlus $($ready.version) is running with Administrator privileges."
+                $ready.elevated -eq $elevated) {
+                Write-Host "ClipPlus $($ready.version) is running (Administrator: $elevated)."
                 return
             }
         } catch {
@@ -175,7 +181,7 @@ function Start-ClipPlusAndVerify($Context) {
         }
     }
     $taskInfo = Get-ScheduledTaskInfo -TaskName $Context.Task -TaskPath '\'
-    throw "ClipPlus did not report readiness. Task result: $($taskInfo.LastTaskResult). Check $($Context.Data)\diagnostics.log and close any separately running ClipPlus instance."
+    throw "ClipPlus did not report readiness. Task result: $($taskInfo.LastTaskResult). Check $data\diagnostics.log and close any separately running ClipPlus instance."
 }
 
 function Enter-SetupLock($Context) {

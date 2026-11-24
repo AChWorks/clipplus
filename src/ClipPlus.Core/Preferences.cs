@@ -21,8 +21,8 @@ public sealed record Preferences
         var value = JsonSerializer.Deserialize<Preferences>(File.ReadAllText(path)) ?? new();
         return value with
         {
-            WindowHeight = double.IsFinite(value.WindowHeight) && value.WindowHeight > 0 ? value.WindowHeight : 520,
-            Shortcut = Enum.IsDefined(value.Shortcut) ? value.Shortcut : Shortcut.WinV
+            WindowHeight = !double.IsNaN(value.WindowHeight) && !double.IsInfinity(value.WindowHeight) && value.WindowHeight > 0 ? value.WindowHeight : 520,
+            Shortcut = Enum.IsDefined(typeof(Shortcut), value.Shortcut) ? value.Shortcut : Shortcut.WinV
         };
     }
 
@@ -31,6 +31,7 @@ public sealed record Preferences
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(temp, path, true);
+        if (File.Exists(path)) File.Replace(temp, path, null);
+        else File.Move(temp, path);
     }
 }

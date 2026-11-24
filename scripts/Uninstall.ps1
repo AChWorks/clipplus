@@ -1,9 +1,10 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
 [CmdletBinding()]
-param()
+param([string]$ExpectedSid = "")
 . (Join-Path $PSScriptRoot 'Setup.Common.ps1')
 $context = Get-ClipPlusContext
+if ($ExpectedSid -and $context.Sid -ne $ExpectedSid) { throw "Sign in to the account that installed ClipPlus before uninstalling it." }
 $mutex = Enter-SetupLock $context
 try {
     Assert-NoReparsePoint $context.Root

@@ -17,7 +17,7 @@ internal static class InstalledFlow
     internal static int Run(string[] args)
     {
         SqlitePlatform.Initialize();
-        var shortcut = Enum.Parse<Shortcut>(Argument(args, "--shortcut"));
+        var shortcut = (Shortcut)Enum.Parse(typeof(Shortcut), Argument(args, "--shortcut"));
         var database = Argument(args, "--database");
         var settings = Path.Combine(Path.GetDirectoryName(database)!, "settings.json");
         var verifySavedGeometry = args.Contains("--verify-saved-geometry");
@@ -190,7 +190,7 @@ internal static class InstalledFlow
         }
         finally
         {
-            SendKeys(modifiers.Reverse().Select(key => KeyInput(key, true)).ToArray());
+            SendKeys(modifiers.AsEnumerable().Reverse().Select(key => KeyInput(key, true)).ToArray());
         }
     }
 

@@ -14,6 +14,8 @@ namespace ClipPlus;
 
 public partial class App : Application
 {
+    private static readonly int ProcessId = GetProcessId();
+    private static int GetProcessId() { using var process = System.Diagnostics.Process.GetCurrentProcess(); return process.Id; }
     private Mutex? _instance;
     private bool _ownsInstance;
     private HwndSource? _messages;
@@ -39,7 +41,14 @@ public partial class App : Application
         {
             var sid = WindowsIdentity.GetCurrent().User!.Value;
             _instance = new Mutex(true, @"Local\AChWorks.ClipPlus." + sid, out _ownsInstance);
-            if (!_ownsInstance) { Shutdown(); return; }
+            if (!_ownsInstance)
+            {
+                if (!Array.Exists(e.Args, arg => arg == "--startup"))
+                    MessageBox.Show("ClipPlus is already running. Exit the existing instance from its tray icon before starting this copy.", "ClipPlus",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                Shutdown(1);
+                return;
+            }
             _data = StateDirectory.Open(sid);
             try { _preferences = Preferences.Load(SettingsPath); }
             catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException)
@@ -68,7 +77,7 @@ public partial class App : Application
             QueueCapture();
             File.WriteAllText(Path.Combine(_data, "ready.json"), System.Text.Json.JsonSerializer.Serialize(new
             {
-                pid = Environment.ProcessId,
+                pid = ProcessId,
                 version = typeof(App).Assembly.GetName().Version?.ToString(),
                 elevated = StateDirectory.Elevated,
                 shortcut = _preferences.Shortcut.ToString(),
@@ -103,6 +112,7 @@ public partial class App : Application
         menu.Items.Add(new Forms.ToolStripSeparator());
         var elevated = StateDirectory.Elevated;
         menu.Items.Add(new Forms.ToolStripMenuItem(elevated ? "Running as Administrator" : "Running normally") { Enabled = false });
+        menu.Items.Add(new Forms.ToolStripMenuItem("ClipPlus " + typeof(App).Assembly.GetName().Version) { Enabled = false });
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Dispatcher.BeginInvoke(new Action(() => Shutdown())));
         // The same embedded icon is used by the EXE, the WPF window and tray.
@@ -135,7 +145,7 @@ public partial class App : Application
     {
         if (_shortcutMenu is null || _tray is null) return;
         _shortcutMenu.DropDownItems.Clear();
-        foreach (var shortcut in Enum.GetValues<Shortcut>())
+        foreach (var shortcut in (Shortcut[])Enum.GetValues(typeof(Shortcut)))
         {
             var item = new Forms.ToolStripMenuItem(ShortcutName(shortcut)) { Checked = shortcut == _preferences.Shortcut };
             item.Click += (_, _) => Dispatcher.BeginInvoke(() => ConfigureShortcut(shortcut));
@@ -245,7 +255,7 @@ public partial class App : Application
             }
             var foreground = Native.GetForegroundWindow();
             _target = foreground != 0 && Native.GetWindowThreadProcessId(foreground, out var pid) != 0 &&
-                pid != (uint)Environment.ProcessId && fromShortcut ? foreground : 0;
+                pid != (uint)ProcessId && fromShortcut ? foreground : 0;
             _popup.ShowAt(Native.Anchor(foreground));
         }
         catch (Exception ex) { Report("Could not open the clipboard popup.", ex); }
@@ -352,7 +362,11 @@ public partial class App : Application
             if (string.IsNullOrEmpty(_data)) return;
             var path = Path.Combine(_data, "diagnostics.log");
             if (File.Exists(path) && new FileInfo(path).Length > 1024 * 1024)
-                File.Move(path, path + ".previous", true);
+            {
+                var previous = path + ".previous";
+                if (File.Exists(previous)) File.Delete(previous);
+                File.Move(path, previous);
+            }
             var code = error is Win32Exception native ? $" win32={native.NativeErrorCode}" : "";
             File.AppendAllText(path, $"{DateTimeOffset.UtcNow:O} {stage}: {error.GetType().Name} hr=0x{error.HResult:X8}{code}{Environment.NewLine}");
         }

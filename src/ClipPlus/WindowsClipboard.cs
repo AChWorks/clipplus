@@ -51,8 +51,10 @@ internal sealed class WindowsClipboard
             }
 
             var data = new Dictionary<ClipFormat, byte[]>();
-            foreach (var (format, id) in _formats)
+            foreach (var pair in _formats)
             {
+                var format = pair.Key;
+                var id = pair.Value;
                 if (!Native.IsClipboardFormatAvailable(id)) continue;
                 var bytes = ReadGlobal(id);
                 if (bytes.Length > 0) data.Add(format, bytes);
@@ -70,8 +72,8 @@ internal sealed class WindowsClipboard
         var allocated = new Dictionary<uint, nint>();
         try
         {
-            foreach (var (format, bytes) in payload.Formats)
-                allocated.Add(_formats[format], Allocate(bytes));
+            foreach (var pair in payload.Formats)
+                allocated.Add(_formats[pair.Key], Allocate(pair.Value));
 
             Open();
             try
@@ -104,7 +106,7 @@ internal sealed class WindowsClipboard
         if (handle == 0) throw Native.Error("GetClipboardData");
         var size = Native.GlobalSize(handle);
         if (size == 0) return [];
-        if (size > (nuint)Array.MaxLength)
+        if (size > (nuint)(int.MaxValue - 56))
             throw new InvalidOperationException("Clipboard format exceeds the managed array capacity.");
         var pointer = Native.GlobalLock(handle);
         if (pointer == 0) throw Native.Error("GlobalLock");

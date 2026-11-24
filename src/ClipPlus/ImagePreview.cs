@@ -46,7 +46,7 @@ internal static class ImagePreview
     // Unsupported layouts keep their original payload and show a text preview.
     private static byte[]? BitmapFile(byte[] dib)
     {
-        if (dib.Length < 40 || dib.Length > Array.MaxLength - 14) return null;
+        if (dib.Length < 40 || dib.Length > int.MaxValue - 70) return null;
         var header = BinaryPrimitives.ReadUInt32LittleEndian(dib);
         if (header is not (40 or 52 or 56 or 108 or 124) || header > dib.Length) return null;
         var bits = BinaryPrimitives.ReadUInt16LittleEndian(dib.AsSpan(14));

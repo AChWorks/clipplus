@@ -159,14 +159,14 @@ public partial class PopupWindow : Window
             MinHeight = 0;
             MaxHeight = available;
             MinHeight = Math.Min(240, available);
-            Height = Math.Clamp(preferences.WindowHeight, MinHeight, MaxHeight);
+            Height = Clamp(preferences.WindowHeight, MinHeight, MaxHeight);
 
             var pxWidth = Math.Min(work.Right - work.Left, (int)Math.Round(Width * scale));
             var pxHeight = Math.Min(work.Bottom - work.Top, (int)Math.Round(Height * scale));
-            var x = Math.Clamp(anchor.X, work.Left, work.Right - pxWidth);
+            var x = Clamp(anchor.X, work.Left, work.Right - pxWidth);
             var y = position is not null || (long)anchor.Y + pxHeight <= work.Bottom
                 ? anchor.Y : anchor.Y - pxHeight;
-            y = Math.Clamp(y, work.Top, work.Bottom - pxHeight);
+            y = Clamp(y, work.Top, work.Bottom - pxHeight);
             var hwnd = new WindowInteropHelper(this).EnsureHandle();
             Native.SetWindowPos(hwnd, 0, x, y, pxWidth, pxHeight, 0x0014); // NOZORDER | NOACTIVATE
             Show();
@@ -276,10 +276,11 @@ public partial class PopupWindow : Window
         card.Style = (Style)FindResource("ClipCard");
         outer.Children.Add(card);
         var panel = new Grid();
-        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         card.Child = panel;
         var accent = new Border { CornerRadius = new CornerRadius(5, 0, 0, 5) };
+        AutomationProperties.SetName(accent, "Clip color accent");
         panel.Children.Add(accent);
         var content = new StackPanel { Margin = new Thickness(6, 4, 5, 6) };
         Grid.SetColumn(content, 1);
@@ -297,7 +298,7 @@ public partial class PopupWindow : Window
             FontWeight = FontWeights.SemiBold, FontSize = 12, ToolTip = "Click to edit title"
         };
         titleHost.Children.Add(title);
-        var swatchDot = new Ellipse { Width = 15, Height = 15, StrokeThickness = 1 };
+        var swatchDot = new Ellipse { Width = 17, Height = 17, StrokeThickness = 1 };
         swatchDot.SetResourceReference(Shape.StrokeProperty, "MutedBrush");
         var swatch = IconButton(swatchDot, "Choose clip color");
         Grid.SetColumn(swatch, 1);
@@ -309,7 +310,7 @@ public partial class PopupWindow : Window
         Grid.SetColumn(delete, 3);
         header.Children.Add(delete);
 
-        var choices = new UniformGrid { Columns = Enum.GetValues<ClipColor>().Length };
+        var choices = new UniformGrid { Columns = ((ClipColor[])Enum.GetValues(typeof(ClipColor))).Length };
         var palette = new Border
         {
             Child = choices, Visibility = Visibility.Collapsed, CornerRadius = new CornerRadius(5),
@@ -478,7 +479,7 @@ public partial class PopupWindow : Window
     private void BuildPalette(Row row)
     {
         row.Choices.Children.Clear();
-        foreach (var color in Enum.GetValues<ClipColor>())
+        foreach (var color in ((ClipColor[])Enum.GetValues(typeof(ClipColor))))
         {
             var dot = new Grid { Width = 20, Height = 20 };
             var ellipse = new Ellipse { Fill = ColorBrush(color), StrokeThickness = 1 };
@@ -558,7 +559,7 @@ public partial class PopupWindow : Window
             e.Handled = true;
             if (ClipList.Items.Count == 0) return;
             var current = ClipList.SelectedIndex;
-            var index = current < 0 ? 0 : Math.Clamp(current + (e.Key == Key.Down ? 1 : -1), 0, ClipList.Items.Count - 1);
+            var index = current < 0 ? 0 : Clamp(current + (e.Key == Key.Down ? 1 : -1), 0, ClipList.Items.Count - 1);
             ClipList.SelectedIndex = index;
             ClipList.ScrollIntoView(ClipList.SelectedItem);
         }
@@ -591,18 +592,21 @@ public partial class PopupWindow : Window
     {
         var hex = color switch
         {
-            ClipColor.Red => _dark ? "#F44336" : "#D32F2F",
-            ClipColor.Orange => _dark ? "#FF9800" : "#C45B00",
-            ClipColor.Yellow => _dark ? "#FFDD00" : "#A67800",
-            ClipColor.Green => _dark ? "#22C55E" : "#16803C",
-            ClipColor.Cyan => _dark ? "#00BCD4" : "#007F96",
-            ClipColor.Blue => _dark ? "#367CFF" : "#235BDE",
-            ClipColor.Purple => _dark ? "#A855F7" : "#8034D1",
-            ClipColor.Pink => _dark ? "#EC4899" : "#CB2579",
+            ClipColor.Red => "#EF2020",
+            ClipColor.Orange => "#FF8800",
+            ClipColor.Yellow => "#F2D400",
+            ClipColor.Green => "#00A846",
+            ClipColor.Cyan => "#00C6D9",
+            ClipColor.Blue => "#215CF5",
+            ClipColor.Purple => "#861EE0",
+            ClipColor.Pink => "#EF1495",
             _ => _dark ? "#A0A0A0" : "#666666"
         };
         return BrushFrom(hex);
     }
+
+    private static int Clamp(int value, int min, int max) => Math.Max(min, Math.Min(value, max));
+    private static double Clamp(double value, double min, double max) => Math.Max(min, Math.Min(value, max));
 
     private static Brush ContrastForeground(Color color)
     {

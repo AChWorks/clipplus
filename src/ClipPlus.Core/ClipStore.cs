@@ -80,8 +80,10 @@ public sealed class ClipStore : IDisposable
             insert.ExecuteNonQuery();
             using var insertedId = Command("SELECT last_insert_rowid()", tx);
             id = (long)insertedId.ExecuteScalar()!;
-            foreach (var (format, bytes) in payload.Formats)
+            foreach (var pair in payload.Formats)
             {
+                var format = pair.Key;
+                var bytes = pair.Value;
                 using var add = Command("INSERT INTO formats(clip_id,format,data) VALUES($id,$format,$data)",
                     tx, ("$id", id), ("$format", (int)format), ("$data", bytes));
                 add.ExecuteNonQuery();
@@ -114,9 +116,9 @@ public sealed class ClipStore : IDisposable
                 reader.GetString(4), reader.GetBoolean(5), reader.GetBoolean(6));
             if (string.IsNullOrWhiteSpace(query) ||
                 item.TitleMatches(query) ||
-                item.Text.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                (item.HasImage && "Image".Contains(query, StringComparison.OrdinalIgnoreCase)) ||
-                (item.HasHtml && "HTML content".Contains(query, StringComparison.OrdinalIgnoreCase)))
+                item.Text.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                (item.HasImage && "Image".IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (item.HasHtml && "HTML content".IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
                 items.Add(item);
         }
         // Stable ordering retains pinned-first and recency within each tier.
@@ -143,7 +145,7 @@ public sealed class ClipStore : IDisposable
 
     public void SetColor(long id, ClipColor color)
     {
-        if (!Enum.IsDefined(color)) throw new ArgumentOutOfRangeException(nameof(color));
+        if (!Enum.IsDefined(typeof(ClipColor), color)) throw new ArgumentOutOfRangeException(nameof(color));
         using var cmd = Command("UPDATE clips SET color=$color WHERE id=$id", null, ("$id", id), ("$color", (int)color));
         cmd.ExecuteNonQuery();
     }

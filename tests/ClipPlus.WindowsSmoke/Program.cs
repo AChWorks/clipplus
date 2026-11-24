@@ -4,6 +4,9 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using ClipPlus;
 using ClipPlus.Core;
@@ -42,7 +45,7 @@ internal static class Program
             if (message == Native.WmClipboardUpdate) { notifications++; handled = true; }
             if (message == Native.WmOpenPopup) { shortcutRequests++; handled = true; }
             if (message == Native.WmShortcutFault) { shortcutFault = (int)wParam; handled = true; }
-            return 0;
+            return IntPtr.Zero;
         });
         if (!Native.AddClipboardFormatListener(second.Handle)) throw Native.Error("Smoke clipboard listener");
         try
@@ -135,6 +138,20 @@ internal static class Program
                 "WPF title match precedes pinned content match");
             search.Text = "No Title";
             Check(list.Items.Count == 0, "WPF untitled placeholder is not searchable");
+            var visibleColors = new HashSet<Color>();
+            foreach (var color in ((ClipColor[])Enum.GetValues(typeof(ClipColor))).Where(c => c != ClipColor.Default))
+            {
+                var colored = store.Capture(ClipPayload.FromText("color fixture " + color));
+                store.SetColor(colored, color);
+                search.Text = "color fixture " + color;
+                popup.UpdateLayout();
+                var accent = Descendants<Border>(list).Single(b => AutomationProperties.GetName(b) == "Clip color accent");
+                Check(accent.ActualWidth >= 11.5 && accent.ActualWidth <= 12.5,
+                    $"{color} accent width is 12 DIP");
+                Check(accent.Background is SolidColorBrush brush && visibleColors.Add(brush.Color),
+                    $"{color} accent is visibly distinct");
+            }
+            Check(visibleColors.Count == 8, "All eight visible palette accents are distinct");
             popup.HidePopup();
             popup.Close();
             Console.WriteLine("Windows smoke checks completed; physical hotkey, interactive paste, elevation, resize and lifecycle still require desktop acceptance.");
@@ -150,6 +167,16 @@ internal static class Program
                 finally { Native.CloseClipboard(); }
             }
             application.Shutdown();
+        }
+    }
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var descendant in Descendants<T>(child)) yield return descendant;
         }
     }
 
@@ -187,7 +214,7 @@ internal static class Program
         var format = Native.RegisterClipboardFormat(name);
         if (format == 0) throw Native.Error("Register privacy marker");
         if (!Native.OpenClipboard(owner)) throw Native.Error("Open marker clipboard");
-        var handle = nint.Zero;
+        nint handle = 0;
         try
         {
             handle = Native.GlobalAlloc(0x0042, 4);

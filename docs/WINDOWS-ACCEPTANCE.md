@@ -15,11 +15,11 @@ Use a disposable or explicitly authorized interactive Windows desktop. Use synth
 
 ## Installation / privilege / lifecycle
 
-1. Verify the archive hash and choose the lightweight package with machine-wide .NET 10 Desktop Runtime or the optional self-contained package. Verify a missing required runtime is reported before replacing an installed version. Extract and run Install.ps1 as the intended logged-in administrator. Check Program Files installation ACL/owner, Task Scheduler principal (interactive, highest), executable path and verified ready.json PID. No UAC disablement or SYSTEM task.
+1. Verify the executable hashes. Launch the portable ClipPlus.exe directly without sidecar files. Run ClipPlus-Setup.exe, proceed through the wizard, choose administrator or normal automatic startup, and install as the intended logged-in administrator. Verify a missing Windows .NET Framework prerequisite is reported before replacing an installed version. Verify Installed Apps registration and the standard uninstaller. Check Program Files installation ACL/owner, Task Scheduler principal (interactive, highest), executable path and verified ready.json PID. No UAC disablement or SYSTEM task.
 2. Repeat tests 2–3 from an ordinary and elevated editor/terminal. Verify normal mode fails safely for a high-integrity target and elevated mode pastes correctly. Do not use the UAC secure desktop.
 3. Verify elevated history and settings use the protected per-user directory, normal history is separate, medium-integrity processes cannot modify privileged app/data files, and diagnostic logs contain no clipboard content.
-4. Log out/in: automatic elevated startup with correct per-user history and settings. Update with a trusted test package: preserve metadata and preferences. Corrupt a copied package payload: installer should reject before stopping the current version. Test failed activation and rollback in the disposable environment.
-5. Uninstall: only ClipPlus-owned files/task are removed; history/settings remain; native Win+V works again.
+4. Log out/in: automatic elevated startup with correct per-user history and settings. Update with a trusted test package: preserve metadata and preferences. Verify the installation payload integrity and rejection before stopping the current version. Test failed activation and rollback in the disposable environment.
+5. Uninstall from Installed Apps: only ClipPlus-owned files/task and registration are removed; history/settings remain; native Win+V works again.
 
 ## Evidence boundary
 

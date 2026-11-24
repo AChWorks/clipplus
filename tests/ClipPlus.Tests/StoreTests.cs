@@ -17,7 +17,7 @@ public sealed class StoreTests
         Assert.Equal(51, rows.Count);
         Assert.Equal(pin, rows[0].Id);
         Assert.Equal("item 74", rows[1].Text);
-        Assert.Equal("item 25", rows[^1].Text);
+        Assert.Equal("item 25", rows[rows.Count - 1].Text);
         store.ClearRecent();
         Assert.Equal(pin, Assert.Single(store.List()).Id);
     }
