@@ -26,6 +26,9 @@ internal static class Program
             return 0;
         }
 
+        if (args.Contains("--installed-flow"))
+            return InstalledFlow.Run(args);
+
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         using var first = new HwndSource(new HwndSourceParameters("ClipPlus smoke sender") { WindowStyle = 0 });
         using var second = new HwndSource(new HwndSourceParameters("ClipPlus smoke receiver") { WindowStyle = 0 });

@@ -8,7 +8,7 @@ namespace ClipPlus;
 
 // Win+V is reserved by Windows and RegisterHotKey can reject it. Use a
 // narrowly scoped, documented low-level hook only for that exact chord.
-// No key history, text collection, modifier suppression or injected events.
+// No key history, text collection or modifier suppression. Ignore lower-integrity injected events; same-integrity accessibility/automation input is supported.
 internal sealed class ShortcutManager(nint window) : IDisposable
 {
     private bool _registered;
@@ -76,7 +76,7 @@ internal sealed class ShortcutManager(nint window) : IDisposable
         if (code >= 0)
         {
             var key = Marshal.PtrToStructure<Native.KeyboardHookData>(data);
-            if (key.Key == Native.VkV && (key.Flags & 0x10) == 0)
+            if (key.Key == Native.VkV && (key.Flags & 0x02) == 0)
             {
                 if (message is 0x101 or 0x105)
                 {

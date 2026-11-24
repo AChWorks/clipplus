@@ -24,6 +24,10 @@ try {
     }
     & (Join-Path $directory 'Install.ps1')
     $installed = $true
+    $testProject = Join-Path $PSScriptRoot 'ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj'
+    $database = Join-Path $context.Data 'history.db'
+    dotnet run --project $testProject -c Release --no-build -- --isolated-desktop --installed-flow --shortcut WinV --database $database
+    if ($LASTEXITCODE -ne 0) { throw "Installed interactive workflow failed ($LASTEXITCODE)." }
     $readyPath = Join-Path $context.Data 'ready.json'
     $firstReady = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
     $sentinel = Join-Path $context.Data 'smoke-state-sentinel.txt'
