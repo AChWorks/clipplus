@@ -1,0 +1,59 @@
+ClipPlus - Third-party notices
+==============================
+
+ClipPlus is developed and distributed by AChWorks.
+ClipPlus first-party source code is available under the Mozilla Public
+License 2.0 (MPL-2.0) at https://github.com/AChWorks/clipplus.
+For each released executable, obtain the corresponding source at its release
+tag (https://github.com/AChWorks/clipplus/releases). See the repository LICENSE
+or the included LICENSE.txt for the full license. Third-party components retain
+their respective licenses listed below.
+
+This distribution embeds the following managed third-party assemblies.
+ClipPlus.Core is first-party project code. Windows Framework and winsqlite3
+are supplied by the operating system and are not redistributed.
+
+Costura.Fody 6.2.0 | Costura.dll | MIT
+Microsoft.Bcl.AsyncInterfaces 10.0.15 | Microsoft.Bcl.AsyncInterfaces.dll | MIT
+Microsoft.Data.Sqlite.Core 10.0.15 | Microsoft.Data.Sqlite.dll | MIT
+SQLitePCLRaw.core 2.1.13 | SQLitePCLRaw.core.dll | Apache-2.0
+SQLitePCLRaw.provider.winsqlite3 2.1.11 | SQLitePCLRaw.provider.winsqlite3.dll | Apache-2.0
+System.Buffers 4.6.1 | System.Buffers.dll | MIT
+System.IO.Pipelines 10.0.15 | System.IO.Pipelines.dll | MIT
+System.Memory 4.6.3 | System.Memory.dll | MIT
+System.Numerics.Vectors 4.6.1 | System.Numerics.Vectors.dll | MIT
+System.Runtime.CompilerServices.Unsafe 6.1.2 | System.Runtime.CompilerServices.Unsafe.dll | MIT
+System.Text.Encodings.Web 10.0.15 | System.Text.Encodings.Web.dll | MIT
+System.Text.Json 10.0.15 | System.Text.Json.dll | MIT
+System.Threading.Tasks.Extensions 4.6.3 | System.Threading.Tasks.Extensions.dll | MIT
+
+Microsoft packages: Copyright (c) Microsoft Corporation. All rights reserved.
+Upstream .NET license: Copyright (c) .NET Foundation and Contributors.
+Sources: https://github.com/dotnet/dotnet (8e0f8ed2312954727f8919d7d1c2f78b483b4ee7)
+https://github.com/dotnet/maintenance-packages
+Maintenance-package source revisions: 6b84308c9ad012f53240d72c1d716d7e42546483,
+f62ca0009b038cab4725a720f386623a969d73ad.
+
+SQLitePCLRaw: Copyright 2014-2024 SourceGear, LLC (NuGet package metadata).
+Apache-2.0 license from https://github.com/ericsink/SQLitePCL.raw/tree/v2.1.11.
+The Windows SQLite provider is distributed unmodified; no native SQLite engine is bundled.
+Upstream NOTICE.TXT (v2.1.11 and v2.1.12 identical Git blob
+9b4d10b6022750c492749e0b4bb22b0f0e70ef5b) includes Microsoft Open
+Technologies attribution. It is included in full for upstream attribution;
+SQLCipher, OpenSSL and a separate SQLite engine are NOT redistributed by ClipPlus.
+SQLitePCLRaw.core 2.1.13: exact NuGet package metadata declares Apache-2.0,
+SourceGear copyright and the same upstream repository. No v2.1.13 source
+tag or repository commit is published in its package metadata; no exact
+source-tag equivalence is asserted.
+
+Costura: Copyright (c) 2012 Simon Cropp and contributors.
+Source: https://github.com/Fody/Costura/tree/6.2.0.
+
+The graphical installer is built using Inno Setup.
+Inno Setup 6.7.1: Copyright (C) 1997-2026 Jordan Russell.
+Portions Copyright (C) 2000-2026 Martijn Laan.
+Source: https://github.com/jrsoftware/issrc/tree/is-6_7_1.
+Inno Setup itself is not a runtime dependency of the portable application.
+Its native copyright notices and attribution remain intact.
+
+Full license and applicable packaged third-party notices follow.

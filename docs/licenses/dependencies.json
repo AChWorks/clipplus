@@ -1,0 +1,80 @@
+[
+  {
+    "package": "Costura.Fody",
+    "version": "6.2.0",
+    "assembly": "Costura.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "Microsoft.Bcl.AsyncInterfaces",
+    "version": "10.0.15",
+    "assembly": "Microsoft.Bcl.AsyncInterfaces.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "Microsoft.Data.Sqlite.Core",
+    "version": "10.0.15",
+    "assembly": "Microsoft.Data.Sqlite.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "SQLitePCLRaw.core",
+    "version": "2.1.13",
+    "assembly": "SQLitePCLRaw.core.dll",
+    "license": "Apache-2.0"
+  },
+  {
+    "package": "SQLitePCLRaw.provider.winsqlite3",
+    "version": "2.1.11",
+    "assembly": "SQLitePCLRaw.provider.winsqlite3.dll",
+    "license": "Apache-2.0"
+  },
+  {
+    "package": "System.Buffers",
+    "version": "4.6.1",
+    "assembly": "System.Buffers.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "System.IO.Pipelines",
+    "version": "10.0.15",
+    "assembly": "System.IO.Pipelines.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "System.Memory",
+    "version": "4.6.3",
+    "assembly": "System.Memory.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "System.Numerics.Vectors",
+    "version": "4.6.1",
+    "assembly": "System.Numerics.Vectors.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "System.Runtime.CompilerServices.Unsafe",
+    "version": "6.1.2",
+    "assembly": "System.Runtime.CompilerServices.Unsafe.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "System.Text.Encodings.Web",
+    "version": "10.0.15",
+    "assembly": "System.Text.Encodings.Web.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "System.Text.Json",
+    "version": "10.0.15",
+    "assembly": "System.Text.Json.dll",
+    "license": "MIT"
+  },
+  {
+    "package": "System.Threading.Tasks.Extensions",
+    "version": "4.6.3",
+    "assembly": "System.Threading.Tasks.Extensions.dll",
+    "license": "MIT"
+  }
+]

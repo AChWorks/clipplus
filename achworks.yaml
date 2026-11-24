@@ -9,6 +9,10 @@ spec:
   lifecycle: development
   system: clipplus
   ownership: AChWorks
+  technology:
+    languages: [CSharp, PowerShell]
+    frameworks: [WPF]
+    runtimes: [dotnet]
   documentation:
     path: docs/
   source:

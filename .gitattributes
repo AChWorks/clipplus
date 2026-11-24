@@ -1,0 +1,2 @@
+docs/licenses/dotnet-third-party-notices.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+docs/licenses/SQLitePCLRaw-NOTICE.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

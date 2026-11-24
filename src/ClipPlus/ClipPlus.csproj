@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/ClipPlus.ico</ApplicationIcon>
+    <Version>0.1.0</Version>
+    <Company>AChWorks</Company>
+    <Authors>AChWorks</Authors>
+    <Product>ClipPlus</Product>
+    <Description>ClipPlus - Windows clipboard history manager</Description>
+    <RepositoryUrl>https://github.com/AChWorks/clipplus</RepositoryUrl>
+    <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets/ClipPlus.ico"/>
+    <EmbeddedResource Include="../../LICENSE" LogicalName="ClipPlus.License.MPL-2.0.txt"/>
+    <EmbeddedResource Include="../../docs/licenses/*.txt">
+      <LogicalName>ClipPlus.Notices.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <ProjectReference Include="../ClipPlus.Core/ClipPlus.Core.csproj" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EmbedDependencies)' == 'true'">
+    <PackageReference Include="Fody" Version="6.9.3" PrivateAssets="all" />
+    <PackageReference Include="Costura.Fody" Version="6.2.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

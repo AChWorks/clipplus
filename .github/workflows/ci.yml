@@ -1,0 +1,57 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: clipplus-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test core on Windows
+        run: dotnet test tests/ClipPlus.Tests/ClipPlus.Tests.csproj -c Release --verbosity minimal
+      - name: Build and run Framework native clipboard and WPF smoke
+        shell: pwsh
+        run: |
+          dotnet build tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop
+          exit $LASTEXITCODE
+      - name: Validate setup script syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem scripts/*.ps1,tests/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+      - name: Build portable executable and graphical installer
+        shell: pwsh
+        run: ./scripts/Build-Package.ps1 -BuildFaultHarness
+      - name: Exercise portable and installer lifecycle on isolated Windows
+        shell: pwsh
+        run: ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe
+      - name: Upload verified candidate files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ClipPlus-Windows
+          path: |
+            artifacts/ClipPlus.exe
+            artifacts/ClipPlus.exe.sha256
+            artifacts/ClipPlus-Setup.exe
+            artifacts/ClipPlus-Setup.exe.sha256
+            artifacts/THIRD-PARTY-NOTICES.txt
+            artifacts/LICENSE.txt
+          if-no-files-found: error
+          retention-days: 14
