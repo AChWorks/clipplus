@@ -254,7 +254,10 @@ internal static class Program
                   notices.Contains("SQLitePCLRaw.core 2.1.13") &&
                   notices.Contains("Costura.Fody 6.2.0") &&
                   notices.Contains("Apache License") && notices.Contains("Simon Cropp") &&
-                  notices.Contains("Microsoft Open Technologies, Inc.") && notices.Contains("Inno Setup License"), "readable embedded third-party notices");
+                  notices.Contains("Microsoft Open Technologies, Inc.") && notices.Contains("Inno Setup License") &&
+                  notices.Contains("Mozilla Public License Version 2.0") &&
+                  notices.Contains("https://github.com/AChWorks/clipplus/releases"),
+                "readable embedded project license, source location and third-party notices");
             var small = new Native.Rect { Left = -1280, Top = 0, Right = 0, Bottom = 720 };
             var anchor = new Native.Point { X = -20, Y = 700 };
             var fit = PopupWindow.FitBounds(small, 1.5, anchor, 650, false);

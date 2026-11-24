@@ -52,5 +52,6 @@ jobs:
             artifacts/ClipPlus-Setup.exe
             artifacts/ClipPlus-Setup.exe.sha256
             artifacts/THIRD-PARTY-NOTICES.txt
+            artifacts/LICENSE.txt
           if-no-files-found: error
           retention-days: 14

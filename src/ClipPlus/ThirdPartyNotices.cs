@@ -25,6 +25,10 @@ internal static class ThirdPartyNotices
             using var reader = new StreamReader(stream);
             text.AppendLine(reader.ReadToEnd()).AppendLine();
         }
+        using var license = assembly.GetManifestResourceStream("ClipPlus.License.MPL-2.0.txt")
+            ?? throw new InvalidOperationException("Missing ClipPlus license resource.");
+        using var licenseReader = new StreamReader(license);
+        text.AppendLine("ClipPlus first-party license (MPL-2.0)").AppendLine(licenseReader.ReadToEnd());
         return text.ToString();
     }
 
@@ -39,7 +43,7 @@ internal static class ThirdPartyNotices
         };
         var window = new Window
         {
-            Title = "ClipPlus - Third-party notices",
+            Title = "ClipPlus - License and notices",
             Content = viewer, Width = 700, Height = 600,
             MinWidth = 280, MinHeight = 200,
             WindowStartupLocation = WindowStartupLocation.CenterScreen

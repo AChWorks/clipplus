@@ -113,10 +113,10 @@ public partial class App : Application
         menu.Items.Add(new Forms.ToolStripSeparator());
         var elevated = StateDirectory.Elevated;
         menu.Items.Add(new Forms.ToolStripMenuItem(elevated ? "Running as Administrator" : "Running normally") { Enabled = false });
-        menu.Items.Add("Third-party notices", null, (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        menu.Items.Add("License and notices", null, (_, _) => Dispatcher.BeginInvoke(new Action(() =>
         {
             try { ThirdPartyNotices.Show(); }
-            catch (Exception ex) { Report("Could not display third-party notices.", ex); }
+            catch (Exception ex) { Report("Could not display license and notices.", ex); }
         })));
         menu.Items.Add(new Forms.ToolStripMenuItem("ClipPlus " + typeof(App).Assembly.GetName().Version) { Enabled = false });
         menu.Items.Add(new Forms.ToolStripSeparator());

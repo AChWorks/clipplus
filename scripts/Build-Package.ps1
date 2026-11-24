@@ -48,6 +48,8 @@ try {
     if (@(Compare-Object $expected $actual).Count -ne 0) {
         throw "Embedded dependency inventory mismatch. Actual: $($actual -join ', ')"
     }
+    if ($names -notcontains 'ClipPlus.License.MPL-2.0.txt') { throw 'Missing embedded ClipPlus MPL-2.0 license.' }
+    Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $OutputDirectory 'LICENSE.txt') -Force
     $noticeFiles = @((Get-Item -LiteralPath (Join-Path $noticeDir 'index.txt'))) +
         @(Get-ChildItem -LiteralPath $noticeDir -Filter '*.txt' | Where-Object Name -ne 'index.txt' | Sort-Object Name)
     foreach ($notice in $noticeFiles) {
@@ -76,6 +78,14 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Fault-test installer compilation failed ($LASTEXITCODE)." }
     }
     Copy-Item -LiteralPath $exe -Destination (Join-Path $OutputDirectory 'ClipPlus.exe') -Force
+    foreach ($name in @('ClipPlus.exe','ClipPlus-Setup.exe')) {
+        $info = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $OutputDirectory $name))
+        if ($info.CompanyName -ne 'AChWorks' -or $info.ProductName -ne 'ClipPlus') {
+            throw "Unexpected publisher/product metadata for $name."
+        }
+        $signature = Get-AuthenticodeSignature -FilePath (Join-Path $OutputDirectory $name)
+        Write-Host "$name publisher metadata: $($info.CompanyName), Authenticode: $($signature.Status)"
+    }
     foreach ($name in @('ClipPlus.exe','ClipPlus-Setup.exe')) {
         $file = Join-Path $OutputDirectory $name
         $digest = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()

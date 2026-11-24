@@ -1,6 +1,14 @@
 ClipPlus - Third-party notices
 ==============================
 
+ClipPlus is developed and distributed by AChWorks.
+ClipPlus first-party source code is available under the Mozilla Public
+License 2.0 (MPL-2.0) at https://github.com/AChWorks/clipplus.
+For each released executable, obtain the corresponding source at its release
+tag (https://github.com/AChWorks/clipplus/releases). See the repository LICENSE
+or the included LICENSE.txt for the full license. Third-party components retain
+their respective licenses listed below.
+
 This distribution embeds the following managed third-party assemblies.
 ClipPlus.Core is first-party project code. Windows Framework and winsqlite3
 are supplied by the operating system and are not redistributed.

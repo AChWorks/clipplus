@@ -43,7 +43,7 @@ function Invoke-Wizard([string]$Path,[string]$Arguments) {
 function Read-Registration {
     if (-not (Test-Path -LiteralPath $registration)) { throw 'ClipPlus is missing from Installed Apps.' }
     $entry = Get-ItemProperty -LiteralPath $registration
-    if ($entry.DisplayName -ne 'ClipPlus') { throw 'Unexpected Installed Apps registration.' }
+    if ($entry.DisplayName -ne 'ClipPlus' -or $entry.Publisher -ne 'AChWorks') { throw 'Unexpected Installed Apps registration or publisher.' }
     if ($entry.UninstallString -notmatch '^"([^"]+)"') { throw 'Missing standard uninstaller executable.' }
     $uninstaller = $Matches[1]
     if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf) -or

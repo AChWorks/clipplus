@@ -9,12 +9,19 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/ClipPlus.ico</ApplicationIcon>
     <Version>0.1.0</Version>
+    <Company>AChWorks</Company>
+    <Authors>AChWorks</Authors>
+    <Product>ClipPlus</Product>
+    <Description>ClipPlus - Windows clipboard history manager</Description>
+    <RepositoryUrl>https://github.com/AChWorks/clipplus</RepositoryUrl>
+    <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/ClipPlus.ico"/>
+    <EmbeddedResource Include="../../LICENSE" LogicalName="ClipPlus.License.MPL-2.0.txt"/>
     <EmbeddedResource Include="../../docs/licenses/*.txt">
       <LogicalName>ClipPlus.Notices.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>

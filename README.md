@@ -2,7 +2,7 @@
 
 A minimal, native Windows clipboard history manager: the familiar Copy/Paste workflow with search, editable titles, colors, a persistent popup position and height, and pinned-first history.
 
-**Status:** Initial implementation in development. Windows desktop acceptance and release review are required before a stable release.
+**Status:** Initial implementation in development. Exact-candidate validation and independent review are required before a stable release.
 
 ## Features
 
@@ -37,9 +37,11 @@ The CI workflow creates portable and graphical installer executables with SHA-25
 
 The installed elevated mode uses a protected, per-user directory under Program Files\ClipPlusData\<user SID>. Normal mode uses %LOCALAPPDATA%\ClipPlus. These histories are deliberately separate across privilege levels, and updates/uninstall preserve them. History is local SQLite data, not a password vault or encrypted backup. ClipPlus honors clipboard exclusion markers and keeps clipboard content out of diagnostic logs. Use the tray's Exit option to stop capture.
 
-## Third-party notices
+## License and publisher
 
-The portable executable and installed app expose **Third-party notices** in the tray menu. The build verifies the actual embedded assembly inventory against `docs/licenses/dependencies.json` and produces a readable notice text alongside both executables. Full upstream license/notice texts are maintained in [docs/licenses](docs/licenses). The application's own distribution license is a separate owner decision.
+ClipPlus first-party code is licensed under the [Mozilla Public License 2.0](LICENSE). Source code for each release is available from its corresponding Git tag and GitHub release source archive. The portable executable and installed app expose **License and notices** in the tray menu. The build verifies the actual embedded assembly inventory and includes the full first-party license and third-party notices in the application and release artifacts. Upstream notices retain their original terms; see [docs/licenses](docs/licenses).
+
+Publisher metadata identifies AChWorks. Until publicly trusted Authenticode signing is available, the executables are unsigned and Windows may display Unknown publisher or SmartScreen warnings. Verify official GitHub release SHA-256 checksums; metadata alone is not publisher authentication. Do not disable UAC or SmartScreen. Compatibility evidence and untested environments are documented in the [Windows acceptance checklist](docs/WINDOWS-ACCEPTANCE.md).
 
 ## Development
 
