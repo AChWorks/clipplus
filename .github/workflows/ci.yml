@@ -1,0 +1,48 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: clipplus-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test core on Windows
+        run: dotnet test tests/ClipPlus.Tests/ClipPlus.Tests.csproj -c Release --verbosity minimal
+      - name: Windows native clipboard and WPF smoke
+        run: dotnet run --project tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release -- --isolated-desktop
+      - name: Validate setup script syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem scripts/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+      - name: Build self-contained Windows package
+        shell: pwsh
+        run: ./scripts/Build-Package.ps1 -Runtime win-x64
+      - name: Exercise installation lifecycle on an isolated interactive runner
+        shell: pwsh
+        run: ./tests/Install-Smoke.ps1 -Package artifacts/ClipPlus-win-x64.zip
+      - name: Upload installable test package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ClipPlus-win-x64
+          path: |
+            artifacts/ClipPlus-win-x64.zip
+            artifacts/ClipPlus-win-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

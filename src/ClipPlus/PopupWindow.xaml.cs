@@ -1,0 +1,618 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Shapes;
+using System.Windows.Threading;
+using ClipPlus.Core;
+using Microsoft.Win32;
+
+namespace ClipPlus;
+
+public partial class PopupWindow : Window
+{
+    private readonly ClipStore _store;
+    private readonly Func<long, Task> _paste;
+    private readonly Action<double> _saveHeight;
+    private readonly Action<string, Exception?> _report;
+    private readonly Func<double> _preferredHeight;
+    private readonly Dictionary<long, Row> _rows = new();
+    private readonly DispatcherTimer _paletteTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
+    private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+    private Row? _openPalette;
+    private Row? _editingRow;
+    private TextBox? _titleEditor;
+    private bool _placing, _refreshing, _refreshPending, _userSizing, _dark;
+    private double _sizeStart;
+
+    private sealed class Row(ClipItem item, ListBoxItem container, Button title, Grid titleHost,
+        Border accent, Button swatch, Ellipse swatchDot, Border palette, UniformGrid choices, Image image)
+    {
+        internal ClipItem Item = item;
+        internal readonly ListBoxItem Container = container;
+        internal readonly Button Title = title;
+        internal readonly Grid TitleHost = titleHost;
+        internal readonly Border Accent = accent;
+        internal readonly Button Swatch = swatch;
+        internal readonly Ellipse SwatchDot = swatchDot;
+        internal readonly Border Palette = palette;
+        internal readonly UniformGrid Choices = choices;
+        internal readonly Image Image = image;
+        internal bool PreviewAttempted;
+    }
+
+    internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<double> saveHeight,
+        Action<string, Exception?> report, Func<double> preferredHeight)
+    {
+        _store = store;
+        _paste = paste;
+        _saveHeight = saveHeight;
+        _report = report;
+        _preferredHeight = preferredHeight;
+        InitializeComponent();
+        ApplyTheme();
+
+        CloseButton.Click += (_, _) => HidePopup();
+        ClearButton.Click += (_, _) => Run(() =>
+        {
+            _store.ClearRecent();
+            Refresh();
+            FocusSearch();
+        });
+        SearchBox.TextChanged += (_, _) =>
+        {
+            SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (!_placing) Run(() => Refresh(false));
+        };
+        ClipList.SelectionChanged += (_, _) => PreviewSelected();
+        PreviewKeyDown += OnKey;
+        Deactivated += (_, _) => { if (!_placing && IsVisible) HidePopup(); };
+        _paletteTimer.Tick += (_, _) =>
+        {
+            _paletteTimer.Stop();
+            if (_openPalette is { } row && !row.Swatch.IsMouseOver && !row.Palette.IsMouseOver &&
+                !row.Swatch.IsKeyboardFocusWithin && !row.Palette.IsKeyboardFocusWithin)
+                ClosePalette();
+        };
+        _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusLabel.Visibility = Visibility.Collapsed; };
+        SourceInitialized += (_, _) => HwndSource.FromHwnd(Handle)?.AddHook(OnWindowMessage);
+    }
+
+    internal nint Handle => new WindowInteropHelper(this).Handle;
+
+    private nint OnWindowMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
+    {
+        if (message == 0x0231) // WM_ENTERSIZEMOVE
+        {
+            _userSizing = true;
+            _sizeStart = ActualHeight;
+        }
+        else if (message == 0x0232 && _userSizing) // WM_EXITSIZEMOVE
+        {
+            _userSizing = false;
+            if (Math.Abs(ActualHeight - _sizeStart) > 0.5) _saveHeight(ActualHeight);
+        }
+        return 0;
+    }
+
+    internal void ShowAt(Native.Point anchor)
+    {
+        _placing = true;
+        try
+        {
+            ApplyTheme();
+            SearchBox.Text = "";
+            ClosePalette(false);
+            EndTitle(false, false);
+            Refresh(false);
+            _statusTimer.Stop();
+            StatusLabel.Visibility = Visibility.Collapsed;
+
+            var monitor = Native.MonitorFromPoint(anchor, 2);
+            var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
+            if (monitor == 0 || !Native.GetMonitorInfo(monitor, ref info))
+                throw Native.Error("GetMonitorInfo");
+
+            var scale = Native.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 && dpiX > 0
+                ? dpiX / 96.0 : 1.0;
+            var work = info.Work;
+            var width = Math.Min(360.0, (work.Right - work.Left) / scale);
+            var available = (work.Bottom - work.Top) / scale;
+            MinWidth = 0;
+            MaxWidth = width;
+            MinWidth = width;
+            Width = width;
+            MinHeight = 0;
+            MaxHeight = available;
+            MinHeight = Math.Min(240, available);
+            Height = Math.Clamp(_preferredHeight(), MinHeight, MaxHeight);
+
+            var pxWidth = Math.Min(work.Right - work.Left, (int)Math.Round(Width * scale));
+            var pxHeight = Math.Min(work.Bottom - work.Top, (int)Math.Round(Height * scale));
+            var x = Math.Clamp(anchor.X, work.Left, work.Right - pxWidth);
+            var y = anchor.Y + pxHeight <= work.Bottom ? anchor.Y : anchor.Y - pxHeight;
+            y = Math.Clamp(y, work.Top, work.Bottom - pxHeight);
+            var hwnd = new WindowInteropHelper(this).EnsureHandle();
+            Native.SetWindowPos(hwnd, 0, x, y, pxWidth, pxHeight, 0x0014); // NOZORDER | NOACTIVATE
+            Show();
+            if (!Native.SetWindowPos(hwnd, 0, x, y, pxWidth, pxHeight, 0x0014))
+                throw Native.Error("SetWindowPos");
+            Activate();
+            if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
+            FocusSearch();
+            if (Native.GetForegroundWindow() != hwnd)
+                ShowStatus("Click the search field to activate ClipPlus.");
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                if (IsVisible) FocusSearch();
+            }));
+        }
+        finally { _placing = false; }
+    }
+
+    internal void HidePopup()
+    {
+        EndTitle(false, false);
+        ClosePalette(false);
+        _refreshPending = false;
+        if (IsVisible) Hide();
+    }
+
+    internal void FocusSearch()
+    {
+        SearchBox.Focus();
+        Keyboard.Focus(SearchBox);
+    }
+
+    internal void HistoryChanged()
+    {
+        if (!IsVisible) return;
+        if (_editingRow is not null || _openPalette is not null) _refreshPending = true;
+        else Run(() => Refresh());
+    }
+
+    internal void ShowStatus(string message)
+    {
+        StatusLabel.Text = message;
+        StatusLabel.Visibility = Visibility.Visible;
+        _statusTimer.Stop();
+        _statusTimer.Start();
+    }
+
+    private void Run(Action action)
+    {
+        try { action(); }
+        catch (Exception ex) { _report("ClipPlus could not complete the requested action.", ex); }
+    }
+
+    private Row? Selected => ClipList.SelectedItem is ListBoxItem container && container.Tag is long id &&
+        _rows.TryGetValue(id, out var row) ? row : null;
+
+    private void Refresh(bool preserveSelection = true)
+    {
+        if (_refreshing) return;
+        var previous = preserveSelection ? Selected?.Item.Id : null;
+        var items = _store.List(SearchBox.Text);
+        _refreshing = true;
+        try
+        {
+            EndTitle(false, false);
+            ClosePalette(false);
+            ClipList.Items.Clear();
+            _rows.Clear();
+            bool? previousGroup = null;
+            foreach (var item in items)
+            {
+                var row = BuildRow(item, previousGroup != item.Pinned);
+                previousGroup = item.Pinned;
+                _rows.Add(item.Id, row);
+                ClipList.Items.Add(row.Container);
+            }
+            EmptyLabel.Text = SearchBox.Text.Length == 0 ? "Nothing copied yet." : "No matching clips.";
+            EmptyLabel.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            ClearButton.IsEnabled = _store.List().Any(item => !item.Pinned);
+            if (previous is long id && _rows.TryGetValue(id, out var selected))
+                ClipList.SelectedItem = selected.Container;
+            else if (items.Count > 0)
+                ClipList.SelectedIndex = 0;
+        }
+        finally { _refreshing = false; _refreshPending = false; }
+        PreviewSelected();
+    }
+
+    private Row BuildRow(ClipItem item, bool startsGroup)
+    {
+        var outer = new StackPanel();
+        if (startsGroup)
+        {
+            var heading = new TextBlock
+            {
+                Text = item.Pinned ? "Pinned" : "Recent", FontSize = 11,
+                Margin = new Thickness(3, 2, 0, 5), FontWeight = FontWeights.SemiBold
+            };
+            heading.SetResourceReference(ForegroundProperty, "MutedBrush");
+            outer.Children.Add(heading);
+        }
+        var card = new Border { ClipToBounds = true };
+        card.Style = (Style)FindResource("ClipCard");
+        outer.Children.Add(card);
+        var panel = new Grid();
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
+        panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        card.Child = panel;
+        var accent = new Border { CornerRadius = new CornerRadius(5, 0, 0, 5) };
+        panel.Children.Add(accent);
+        var content = new StackPanel { Margin = new Thickness(6, 4, 5, 6) };
+        Grid.SetColumn(content, 1);
+        panel.Children.Add(content);
+
+        var header = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        for (var i = 0; i < 3; i++) header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        content.Children.Add(header);
+        var titleHost = new Grid();
+        header.Children.Add(titleHost);
+        var title = new Button
+        {
+            HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(3, 1, 3, 1),
+            FontWeight = FontWeights.SemiBold, FontSize = 12, ToolTip = "Click to edit title"
+        };
+        titleHost.Children.Add(title);
+        var swatchDot = new Ellipse { Width = 13, Height = 13, StrokeThickness = 1 };
+        swatchDot.SetResourceReference(Shape.StrokeProperty, "MutedBrush");
+        var swatch = IconButton(swatchDot, "Choose clip color");
+        Grid.SetColumn(swatch, 1);
+        header.Children.Add(swatch);
+        var pin = IconButton(Glyph(item.Pinned ? "\uE77A" : "\uE718", item.Pinned), item.Pinned ? "Unpin" : "Pin");
+        Grid.SetColumn(pin, 2);
+        header.Children.Add(pin);
+        var delete = IconButton(Glyph("\uE74D"), "Delete clip");
+        Grid.SetColumn(delete, 3);
+        header.Children.Add(delete);
+
+        var choices = new UniformGrid { Columns = Enum.GetValues<ClipColor>().Length };
+        var palette = new Border
+        {
+            Child = choices, Visibility = Visibility.Collapsed, CornerRadius = new CornerRadius(5),
+            Margin = new Thickness(0, 0, 0, 4), Padding = new Thickness(2)
+        };
+        palette.SetResourceReference(BackgroundProperty, "FieldBrush");
+        content.Children.Add(palette);
+
+        var previewPanel = new DockPanel { LastChildFill = true, Margin = new Thickness(3, 0, 3, 1), Background = Brushes.Transparent };
+        var image = new Image
+        {
+            Width = 76, MaxHeight = 52, Stretch = Stretch.Uniform, Margin = new Thickness(0, 0, 7, 0),
+            Visibility = Visibility.Collapsed
+        };
+        AutomationProperties.SetName(image, "Clipboard image preview");
+        DockPanel.SetDock(image, Dock.Left);
+        previewPanel.Children.Add(image);
+        var preview = new TextBlock
+        {
+            Text = item.Preview, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxHeight = 56, VerticalAlignment = VerticalAlignment.Center
+        };
+        preview.FlowDirection = TextDirection(item.Preview);
+        previewPanel.Children.Add(preview);
+        content.Children.Add(previewPanel);
+
+        var container = new ListBoxItem { Content = outer, Tag = item.Id };
+        AutomationProperties.SetName(container, $"{item.DisplayTitle}{(item.Pinned ? ", pinned" : "")}");
+        var row = new Row(item, container, title, titleHost, accent, swatch, swatchDot, palette, choices, image);
+        SetTitleVisual(row);
+        SetColorVisual(row);
+        title.Click += (_, _) => Run(() => BeginTitle(row));
+        pin.Click += (_, _) => Run(() =>
+        {
+            _store.SetPinned(row.Item.Id, !row.Item.Pinned);
+            Refresh();
+            FocusSearch();
+        });
+        delete.Click += (_, _) => Run(() =>
+        {
+            _store.Delete(row.Item.Id);
+            Refresh();
+            FocusSearch();
+        });
+        swatch.MouseEnter += (_, _) => { if (_editingRow is null) OpenPalette(row); };
+        swatch.MouseLeave += (_, _) => StartPaletteTimer();
+        swatch.LostKeyboardFocus += (_, _) => StartPaletteTimer();
+        palette.MouseLeave += (_, _) => StartPaletteTimer();
+        palette.MouseEnter += (_, _) => _paletteTimer.Stop();
+        palette.LostKeyboardFocus += (_, _) => StartPaletteTimer();
+        swatch.Click += (_, _) =>
+        {
+            OpenPalette(row);
+            if (choices.Children.Count > 0 && choices.Children[0] is Button first) first.Focus();
+        };
+        container.MouseMove += (_, _) =>
+        {
+            if (_editingRow is null && (_openPalette is null || _openPalette == row))
+                ClipList.SelectedItem = container;
+        };
+        previewPanel.MouseLeftButtonUp += async (_, e) =>
+        {
+            e.Handled = true;
+            ClipList.SelectedItem = container;
+            await _paste(item.Id);
+        };
+        previewPanel.Cursor = Cursors.Hand;
+        previewPanel.ToolTip = "Click to paste";
+        return row;
+    }
+
+    private static Button IconButton(UIElement content, string label)
+    {
+        var button = new Button { Content = content, Width = 28, Height = 26, Padding = new Thickness(2), ToolTip = label };
+        AutomationProperties.SetName(button, label);
+        return button;
+    }
+
+    private static TextBlock Glyph(string text, bool emphasized = false)
+    {
+        var block = new TextBlock { Text = text, FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 13 };
+        block.SetResourceReference(ForegroundProperty, emphasized ? "FocusBrush" : "MutedBrush");
+        return block;
+    }
+
+    private static FlowDirection TextDirection(string text)
+    {
+        foreach (var c in text)
+        {
+            if (!char.IsLetter(c)) continue;
+            return c is >= '\u0590' and <= '\u08FF' or >= '\uFB1D' and <= '\uFEFC'
+                ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;
+        }
+        return FlowDirection.LeftToRight;
+    }
+
+    private void SetTitleVisual(Row row)
+    {
+        var label = new TextBlock
+        {
+            Text = row.Item.DisplayTitle, TextTrimming = TextTrimming.CharacterEllipsis,
+            FlowDirection = TextDirection(row.Item.DisplayTitle)
+        };
+        label.SetResourceReference(ForegroundProperty, row.Item.Title.Length == 0 ? "MutedBrush" : "TextBrush");
+        row.Title.Content = label;
+        AutomationProperties.SetName(row.Title, $"Edit title: {row.Item.DisplayTitle}");
+        AutomationProperties.SetName(row.Container, $"{row.Item.DisplayTitle}{(row.Item.Pinned ? ", pinned" : "")}");
+    }
+
+    private void BeginTitle(Row row)
+    {
+        EndTitle(false, false);
+        ClosePalette(false);
+        ClipList.SelectedItem = row.Container;
+        var editor = new TextBox
+        {
+            Text = row.Item.Title, FontSize = 12, Padding = new Thickness(3, 1, 3, 1), MinHeight = 26
+        };
+        AutomationProperties.SetName(editor, "Clip title");
+        row.Title.Visibility = Visibility.Collapsed;
+        row.TitleHost.Children.Add(editor);
+        _editingRow = row;
+        _titleEditor = editor;
+        editor.LostKeyboardFocus += (_, _) =>
+        {
+            if (_titleEditor == editor) Run(() => EndTitle(false, true));
+        };
+        editor.Focus();
+        editor.SelectAll();
+    }
+
+    private void EndTitle(bool save, bool processPending = true)
+    {
+        if (_editingRow is not { } row || _titleEditor is not { } editor) return;
+        _editingRow = null;
+        _titleEditor = null;
+        try
+        {
+            if (save)
+            {
+                var title = editor.Text.Trim();
+                _store.SetTitle(row.Item.Id, title);
+                row.Item = row.Item with { Title = title };
+                SetTitleVisual(row);
+            }
+        }
+        finally
+        {
+            row.TitleHost.Children.Remove(editor);
+            row.Title.Visibility = Visibility.Visible;
+        }
+        if (processPending && (_refreshPending || save && SearchBox.Text.Length > 0)) Refresh();
+    }
+
+    private void OpenPalette(Row row)
+    {
+        if (_openPalette == row) { _paletteTimer.Stop(); return; }
+        ClosePalette(false);
+        ClipList.SelectedItem = row.Container;
+        _openPalette = row;
+        BuildPalette(row);
+        row.Palette.Visibility = Visibility.Visible;
+        _paletteTimer.Stop();
+    }
+
+    private void BuildPalette(Row row)
+    {
+        row.Choices.Children.Clear();
+        foreach (var color in Enum.GetValues<ClipColor>())
+        {
+            var dot = new Grid { Width = 20, Height = 20 };
+            var ellipse = new Ellipse { Fill = ColorBrush(color), StrokeThickness = 1 };
+            ellipse.SetResourceReference(Shape.StrokeProperty, "MutedBrush");
+            dot.Children.Add(ellipse);
+            if (color == row.Item.Color)
+            {
+                var check = new TextBlock
+                {
+                    Text = "\u2713", FontWeight = FontWeights.Bold, FontSize = 13,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                    Foreground = color == ClipColor.Default && !_dark ? Brushes.White :
+                        color == ClipColor.Default ? Brushes.Black : (_dark ? Brushes.Black : Brushes.White)
+                };
+                dot.Children.Add(check);
+            }
+            var button = new Button { Content = dot, Padding = new Thickness(0), ToolTip = color == ClipColor.Default ? "Default (no color)" : color.ToString() };
+            AutomationProperties.SetName(button, color == row.Item.Color ? $"{color}, selected" : color.ToString());
+            button.Click += (_, _) => Run(() =>
+            {
+                _store.SetColor(row.Item.Id, color);
+                row.Item = row.Item with { Color = color };
+                SetColorVisual(row);
+                ClosePalette();
+                FocusSearch();
+            });
+            row.Choices.Children.Add(button);
+        }
+    }
+
+    private void SetColorVisual(Row row)
+    {
+        row.Accent.Background = row.Item.Color == ClipColor.Default ? Brushes.Transparent : ColorBrush(row.Item.Color);
+        row.SwatchDot.Fill = ColorBrush(row.Item.Color);
+        row.Swatch.ToolTip = $"Color: {row.Item.Color} (choose color)";
+        AutomationProperties.SetName(row.Swatch, $"Choose color, current {row.Item.Color}");
+    }
+
+    private void StartPaletteTimer()
+    {
+        _paletteTimer.Stop();
+        _paletteTimer.Start();
+    }
+
+    private void ClosePalette(bool processPending = true)
+    {
+        _paletteTimer.Stop();
+        if (_openPalette is not { } row) return;
+        _openPalette = null;
+        row.Palette.Visibility = Visibility.Collapsed;
+        if (processPending && _refreshPending) Refresh();
+    }
+
+    private async void OnKey(object sender, KeyEventArgs e)
+    {
+        if (_editingRow is not null)
+        {
+            if (e.Key is Key.Enter or Key.Escape)
+            {
+                e.Handled = true;
+                Run(() => EndTitle(e.Key == Key.Enter));
+                FocusSearch();
+            }
+            return;
+        }
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            if (_openPalette is not null) { ClosePalette(); FocusSearch(); }
+            else HidePopup();
+            return;
+        }
+        // Keep button keyboard actions native, including color choice, title
+        // and pin. Enter in search/list alone means paste.
+        if (Keyboard.FocusedElement is Button) return;
+        if (e.Key is Key.Down or Key.Up)
+        {
+            e.Handled = true;
+            if (ClipList.Items.Count == 0) return;
+            var current = ClipList.SelectedIndex;
+            var index = current < 0 ? 0 : Math.Clamp(current + (e.Key == Key.Down ? 1 : -1), 0, ClipList.Items.Count - 1);
+            ClipList.SelectedIndex = index;
+            ClipList.ScrollIntoView(ClipList.SelectedItem);
+        }
+        else if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            if (Selected is { } row) await _paste(row.Item.Id);
+        }
+    }
+
+    private void PreviewSelected()
+    {
+        if (_refreshing || Selected is not { } row || !row.Item.HasImage || row.PreviewAttempted) return;
+        row.PreviewAttempted = true;
+        try
+        {
+            var payload = _store.Read(row.Item.Id);
+            if (payload is null) return;
+            var image = ImagePreview.Decode(payload);
+            if (image is not null)
+            {
+                row.Image.Source = image;
+                row.Image.Visibility = Visibility.Visible;
+            }
+        }
+        catch (Exception ex) { _report("Image preview is unavailable; the original clip can still be pasted.", ex); }
+    }
+
+    private Brush ColorBrush(ClipColor color)
+    {
+        var hex = color switch
+        {
+            ClipColor.Red => _dark ? "#F18188" : "#BC3947",
+            ClipColor.Orange => _dark ? "#F1AC64" : "#A85412",
+            ClipColor.Yellow => _dark ? "#F1D66D" : "#8A6507",
+            ClipColor.Green => _dark ? "#76CB97" : "#237346",
+            ClipColor.Cyan => _dark ? "#6CCCD5" : "#147681",
+            ClipColor.Blue => _dark ? "#82B5F5" : "#255FAE",
+            ClipColor.Purple => _dark ? "#C0A0F3" : "#7451B2",
+            ClipColor.Pink => _dark ? "#EE9AC7" : "#A33B77",
+            _ => _dark ? "#A0A0A0" : "#666666"
+        };
+        return BrushFrom(hex);
+    }
+
+    private static SolidColorBrush BrushFrom(string hex)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
+
+    private void ApplyTheme()
+    {
+        var dark = false;
+        try
+        {
+            dark = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme", 1) is int value && value == 0;
+        }
+        catch (System.Security.SecurityException) { }
+        _dark = dark;
+        void Set(string name, string light, string night) => Resources[name] = BrushFrom(dark ? night : light);
+        if (SystemParameters.HighContrast)
+        {
+            Resources["PanelBrush"] = SystemColors.WindowBrush;
+            Resources["FieldBrush"] = SystemColors.WindowBrush;
+            Resources["CardBrush"] = SystemColors.WindowBrush;
+            Resources["SelectedBrush"] = SystemColors.WindowBrush;
+            Resources["HoverBrush"] = SystemColors.ControlBrush;
+            Resources["TextBrush"] = SystemColors.WindowTextBrush;
+            Resources["MutedBrush"] = SystemColors.WindowTextBrush;
+            Resources["BorderBrush"] = SystemColors.WindowTextBrush;
+            Resources["FocusBrush"] = SystemColors.HighlightBrush;
+            return;
+        }
+        Set("PanelBrush", "#F5F5F5", "#202020");
+        Set("FieldBrush", "#FFFFFF", "#303030");
+        Set("CardBrush", "#FFFFFF", "#2B2B2B");
+        Set("SelectedBrush", "#EAF2FF", "#363E4A");
+        Set("HoverBrush", "#E8E8E8", "#414141");
+        Set("TextBrush", "#1D1D1D", "#F4F4F4");
+        Set("MutedBrush", "#595959", "#BBBBBB");
+        Set("BorderBrush", "#D3D3D3", "#414141");
+        Set("FocusBrush", "#2562A8", "#9BC9FF");
+    }
+}

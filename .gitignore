@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+.local-sdk/
+artifacts/
+TestResults/
+.vs/
+*.user
+*.suo
