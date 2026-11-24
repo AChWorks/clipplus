@@ -36,6 +36,8 @@ Publisher metadata identifies AChWorks. The initial release is unsigned, so Wind
 
 ClipPlus keeps 100 recent unpinned clips plus all pinned clips, deduplicates equivalent copies without losing their metadata, and retains Unicode text, HTML and relevant native image formats. Pinned and Recent are global views; custom categories contain both pinned and unpinned clips, with pins first. A clip can belong to one category. Deleting a category detaches its clips without deleting them. Categorization does not prevent normal history eviction: pin a clip to keep it. Category order, the selected view and compact mode persist. In compact mode, use the Paste clip button or Enter to paste a titled clip; clicking its title still edits it. The popup follows the system light/dark appearance, with a slim Windows-style scrollbar for overflowing history.
 
+Updating from v0.1.0 uses an additive, transactional history migration. An arbitrary downgrade is not a full reversal of the data model: v0.1.0 still enforces its 50-item recent limit during capture and pin/unpin and does not understand the new compact/selected-view settings. Do not downgrade a history with more than 50 recent clips without first preserving a separate copy of its database and settings.
+
 ## Update, uninstall and recovery
 
 - **Update:** run the new trusted Setup executable under the same account. History and preferences are preserved. When switching from an early pre-release test installer with a shared Start menu shortcut, uninstall that test build first, then install the stable version; this preserves history and settings.

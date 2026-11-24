@@ -47,9 +47,19 @@ jobs:
       - name: Build portable executable and graphical installer
         shell: pwsh
         run: ./scripts/Build-Package.ps1 -BuildFaultHarness
+      - name: Retrieve exact released v0.1.0 installer fixture
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $legacy = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.1.0'
+          gh release download v0.1.0 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $legacy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise portable and installer lifecycle on isolated Windows
         shell: pwsh
-        run: ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe
+        run: |
+          $legacy = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.1.0'
+          ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe -LegacySetup (Join-Path $legacy 'ClipPlus-Setup.exe')
       - name: Upload verified candidate files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

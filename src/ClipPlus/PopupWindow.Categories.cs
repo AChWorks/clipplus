@@ -305,15 +305,10 @@ public partial class PopupWindow
         }
         else CategoryTabs.Children.Add(host);
 
-        host.LostKeyboardFocus += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        host.LostKeyboardFocus += (_, _) =>
         {
-            if (_categoryEditHost != host || host.IsKeyboardFocusWithin) return;
-            Run(() =>
-            {
-                EndCategoryEdit();
-                if (_refreshPending) Refresh();
-            });
-        }));
+            if (_categoryEditHost == host) RequestInteractionReconciliation();
+        };
         host.BringIntoView();
         editor.Focus();
         editor.SelectAll();
@@ -452,6 +447,6 @@ public partial class PopupWindow
         if (_openCategoryRow is not { } row) return;
         _openCategoryRow = null;
         row.CategoryPicker.Visibility = Visibility.Collapsed;
-        if (processPending && _refreshPending) Refresh();
+        if (processPending) FlushPendingHistory();
     }
 }

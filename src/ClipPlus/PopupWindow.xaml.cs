@@ -32,13 +32,14 @@ public partial class PopupWindow : Window
     private Row? _editingRow;
     private TextBox? _titleEditor;
     private bool _placing, _refreshing, _refreshPending, _dark;
+    private bool _reconcileRequested, _reconcileQueued;
     private bool _inMoveSize, _userMoving, _userSizing;
     private Native.Rect _moveStart;
     private Native.Point? _keyboardCursor;
 
     private sealed class Row(ClipItem item, ListBoxItem container, Button title, Grid titleHost,
         Border accent, Button swatch, Ellipse swatchDot, Border palette, UniformGrid choices, Image? image,
-        Border categoryPicker, WrapPanel categoryChoices)
+        Button categoryButton, Border categoryPicker, WrapPanel categoryChoices)
     {
         internal ClipItem Item = item;
         internal readonly ListBoxItem Container = container;
@@ -50,6 +51,7 @@ public partial class PopupWindow : Window
         internal readonly Border Palette = palette;
         internal readonly UniformGrid Choices = choices;
         internal readonly Image? Image = image;
+        internal readonly Button CategoryButton = categoryButton;
         internal readonly Border CategoryPicker = categoryPicker;
         internal readonly WrapPanel CategoryChoices = categoryChoices;
         internal bool PreviewAttempted;
@@ -96,13 +98,18 @@ public partial class PopupWindow : Window
         };
         ClipList.SelectionChanged += (_, _) => PreviewSelected();
         PreviewKeyDown += OnKey;
+        InputManager.Current.PostProcessInput += OnPostProcessInput;
+        Closed += (_, _) => InputManager.Current.PostProcessInput -= OnPostProcessInput;
         Deactivated += (_, _) => { if (!_placing && !_draggingCategory && IsVisible) HidePopup(); };
         _paletteTimer.Tick += (_, _) =>
         {
             _paletteTimer.Stop();
             if (_openPalette is { } row && !row.Swatch.IsMouseOver && !row.Palette.IsMouseOver &&
                 !row.Swatch.IsKeyboardFocusWithin && !row.Palette.IsKeyboardFocusWithin)
-                ClosePalette();
+            {
+                if (Mouse.LeftButton == MouseButtonState.Pressed) RequestInteractionReconciliation();
+                else ClosePalette();
+            }
         };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusLabel.Visibility = Visibility.Collapsed; };
         SourceInitialized += (_, _) => HwndSource.FromHwnd(Handle)?.AddHook(OnWindowMessage);
@@ -242,6 +249,7 @@ public partial class PopupWindow : Window
         CloseCategoryPicker(false);
         EndCategoryEdit();
         _refreshPending = false;
+        _reconcileRequested = false;
         if (IsVisible) Hide();
     }
 
@@ -254,9 +262,54 @@ public partial class PopupWindow : Window
     internal void HistoryChanged()
     {
         if (!IsVisible) return;
-        if (_editingRow is not null || _openPalette is not null || _openCategoryRow is not null ||
-            _categoryEditor is not null || _draggingCategory) _refreshPending = true;
-        else Run(() => Refresh());
+        _refreshPending = true;
+        Run(FlushPendingHistory);
+    }
+
+    private bool InteractionActive => Mouse.LeftButton == MouseButtonState.Pressed || _draggingCategory ||
+        _editingRow is not null || _openPalette is not null || _openCategoryRow is not null || _categoryEditor is not null;
+
+    private void FlushPendingHistory()
+    {
+        if (!_refreshPending || !IsVisible) return;
+        if (!InteractionActive) Refresh();
+        else if (Mouse.LeftButton == MouseButtonState.Pressed) RequestInteractionReconciliation();
+    }
+
+    // WPF transfers focus on mouse-down, before Button.Click on mouse-up.
+    // Neither passive dismissal nor a history rebuild may remove/reposition
+    // the pressed control during that interval. Reconcile after input has
+    // finished, without delaying clipboard capture or using a race timer.
+    private void RequestInteractionReconciliation()
+    {
+        _reconcileRequested = true;
+        if (_reconcileQueued || !IsVisible || _draggingCategory || Mouse.LeftButton == MouseButtonState.Pressed) return;
+        _reconcileQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _reconcileQueued = false;
+            if (!_reconcileRequested || !IsVisible || _draggingCategory || Mouse.LeftButton == MouseButtonState.Pressed) return;
+            _reconcileRequested = false;
+            Run(() =>
+            {
+                if (_categoryEditHost is { IsKeyboardFocusWithin: false }) EndCategoryEdit();
+                if (_titleEditor is { IsKeyboardFocusWithin: false }) EndTitle(false, false);
+                if (_openCategoryRow is { } picker && !picker.CategoryButton.IsKeyboardFocusWithin &&
+                    !picker.CategoryPicker.IsKeyboardFocusWithin) CloseCategoryPicker(false);
+                if (_openPalette is { } palette && !palette.Swatch.IsMouseOver && !palette.Palette.IsMouseOver &&
+                    !palette.Swatch.IsKeyboardFocusWithin && !palette.Palette.IsKeyboardFocusWithin) ClosePalette(false);
+                FlushPendingHistory();
+            });
+        }));
+    }
+
+    private void OnPostProcessInput(object sender, ProcessInputEventArgs e)
+    {
+        // Includes mouse capture release and movement back into the popup.
+        // The Background operation runs after the routed action, including Click.
+        if (IsVisible && _reconcileRequested && e.StagingItem.Input is MouseEventArgs &&
+            Mouse.LeftButton == MouseButtonState.Released)
+            RequestInteractionReconciliation();
     }
 
     internal void ShowStatus(string message)
@@ -422,19 +475,13 @@ public partial class PopupWindow : Window
 
         var container = new ListBoxItem { Content = outer, Tag = item.Id };
         AutomationProperties.SetName(container, $"{item.DisplayTitle}{(item.Pinned ? ", pinned" : "")}");
-        var row = new Row(item, container, title, titleHost, accent, swatch, swatchDot, palette, choices, image, categoryPicker, categoryChoices);
+        var row = new Row(item, container, title, titleHost, accent, swatch, swatchDot, palette, choices, image, categoryButton, categoryPicker, categoryChoices);
         categoryButton.Click += (_, _) => Run(() => ToggleCategoryPicker(row));
-        void ClosePickerAfterFocusChange()
+        categoryPicker.LostKeyboardFocus += (_, _) => RequestInteractionReconciliation();
+        categoryButton.LostKeyboardFocus += (_, _) =>
         {
-            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-            {
-                if (_openCategoryRow == row && !categoryButton.IsKeyboardFocusWithin &&
-                    !categoryPicker.IsKeyboardFocusWithin)
-                    Run(() => CloseCategoryPicker());
-            }));
-        }
-        categoryPicker.LostKeyboardFocus += (_, _) => ClosePickerAfterFocusChange();
-        categoryButton.LostKeyboardFocus += (_, _) => ClosePickerAfterFocusChange();
+            if (_openCategoryRow == row) RequestInteractionReconciliation();
+        };
         SetTitleVisual(row);
         SetColorVisual(row);
         title.Click += (_, _) => Run(() => BeginTitle(row));
@@ -450,7 +497,8 @@ public partial class PopupWindow : Window
             Refresh();
             FocusSearch();
         });
-        swatch.MouseEnter += (_, _) => { if (_editingRow is null && _categoryEditor is null && _openCategoryRow is null) OpenPalette(row); };
+        swatch.MouseEnter += (_, _) => { if (Mouse.LeftButton == MouseButtonState.Released && _editingRow is null &&
+            _categoryEditor is null && _openCategoryRow is null) OpenPalette(row); };
         swatch.MouseLeave += (_, _) => StartPaletteTimer();
         swatch.LostKeyboardFocus += (_, _) => StartPaletteTimer();
         palette.MouseLeave += (_, _) => StartPaletteTimer();
@@ -545,7 +593,7 @@ public partial class PopupWindow : Window
         _titleEditor = editor;
         editor.LostKeyboardFocus += (_, _) =>
         {
-            if (_titleEditor == editor) Run(() => EndTitle(false, true));
+            if (_titleEditor == editor) RequestInteractionReconciliation();
         };
         editor.Focus();
         editor.SelectAll();
@@ -571,7 +619,11 @@ public partial class PopupWindow : Window
             row.TitleHost.Children.Remove(editor);
             row.Title.Visibility = Visibility.Visible;
         }
-        if (processPending && (_refreshPending || save && (_compact || SearchBox.Text.Length > 0))) Refresh();
+        if (processPending)
+        {
+            if (save && (_compact || SearchBox.Text.Length > 0)) Refresh();
+            else FlushPendingHistory();
+        }
     }
 
     private void OpenPalette(Row row)
@@ -639,7 +691,7 @@ public partial class PopupWindow : Window
         if (_openPalette is not { } row) return;
         _openPalette = null;
         row.Palette.Visibility = Visibility.Collapsed;
-        if (processPending && _refreshPending) Refresh();
+        if (processPending) FlushPendingHistory();
     }
 
     private async void OnKey(object sender, KeyEventArgs e)

@@ -1,7 +1,8 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$Setup,[Parameter(Mandatory)][string]$Portable,
-      [Parameter(Mandatory)][string]$FaultSetup)
+      [Parameter(Mandatory)][string]$FaultSetup,
+      [Parameter(Mandatory)][string]$LegacySetup)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -17,6 +18,14 @@ $context = Get-ClipPlusContext
 $setupFile = (Get-Item -LiteralPath $Setup).FullName
 $portableFile = (Get-Item -LiteralPath $Portable).FullName
 $faultFile = (Get-Item -LiteralPath $FaultSetup).FullName
+$legacyFile = (Get-Item -LiteralPath $LegacySetup).FullName
+$legacySetupHash = '587266B81DB63244C54DE969832B59C02BE18FD83D4CBC6335D9530E89408D83'
+$legacyExeHash = '36C6BCB7EFDE4E50BA6E5D489781C5B24223F9A0B9DC4B632E32F21C304416C0'
+if ((Get-FileHash -LiteralPath $legacyFile -Algorithm SHA256).Hash -ne $legacySetupHash) {
+    throw 'Released v0.1.0 fixture does not match its independently verified release checksum.'
+}
+$testExe = Join-Path $PSScriptRoot 'ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe'
+$database = Join-Path $context.Data 'history.db'
 $readyPath = Join-Path $context.Data 'ready.json'
 $registration = Join-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' "ClipPlus-$($context.Sid)_is1"
 $registrationDir = Join-Path (Join-Path $context.Root 'Installers') $context.Sid
@@ -288,6 +297,23 @@ function Snapshot-History {
     return [string]$output
 }
 
+function Snapshot-LegacyHistory([switch]$Migrated) {
+    $arguments = @('--isolated-desktop','--snapshot-legacy-history','--database',$database)
+    if ($Migrated) { $arguments += '--expect-migrated' }
+    $output = & $testExe @arguments
+    if ($LASTEXITCODE -ne 0 -or $output -notmatch '^[0-9A-F]{64}$') { throw 'Could not snapshot released-version fixture.' }
+    return [string]$output
+}
+
+function Assert-LegacyRunning([DateTime]$Started) {
+    $ready = Get-ReadyInstance $context $Started
+    if ($null -eq $ready -or -not $ready.elevated -or $ready.version -notlike '0.1.0*' -or
+        (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $legacyExeHash) {
+        throw 'Expected the exact published v0.1.0 executable running after install or rollback.'
+    }
+    $null = Read-Registration
+}
+
 function Remove-Wizard {
     $uninstaller = Read-Registration
     Invoke-Wizard $uninstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$uninstallLog"""
@@ -298,7 +324,8 @@ function Remove-Wizard {
 try {
     if ((Test-Path -LiteralPath $context.Install) -or $null -ne (Get-OwnedTask $context) -or
         (Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $context.Transaction) -or
-        (Test-Path -LiteralPath $context.RegistrationDir) -or (Test-Path -LiteralPath $context.Shortcut)) {
+        (Test-Path -LiteralPath $context.RegistrationDir) -or (Test-Path -LiteralPath $context.Shortcut) -or
+        (Test-Path -LiteralPath $context.Data)) {
         throw 'Runner already contains installation resources; refusing to touch them.'
     }
 
@@ -310,6 +337,67 @@ try {
     $foreignLink.Save()
     $foreignCreated = $true
     $foreignShortcutHash = (Get-FileHash -LiteralPath $foreignShortcut -Algorithm SHA256).Hash
+
+    # Real released-version upgrade and rollback: verify both the old setup
+    # and its installed executable by their immutable release checksums.
+    # Use only the newly created synthetic fixture on this isolated runner.
+    & $testExe --isolated-desktop --empty-fixture-clipboard
+    if ($LASTEXITCODE -ne 0) { throw 'Could not empty isolated clipboard before legacy installation.' }
+    $legacyStarted = [DateTime]::UtcNow
+    Invoke-Wizard $legacyFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
+    $installed = $true
+    Assert-LegacyRunning $legacyStarted
+    Stop-ClipPlus $context
+    & $testExe --isolated-desktop --seed-legacy-history --database $database
+    if ($LASTEXITCODE -ne 0) { throw 'Could not seed actual released-version database.' }
+    $legacyBaseline = Snapshot-LegacyHistory
+    Start-ClipPlusAndVerify $context
+    if ((Snapshot-LegacyHistory) -ne $legacyBaseline) { throw 'Released application altered fixture before upgrade.' }
+
+    $rollbackStarted = [DateTime]::UtcNow
+    Invoke-FailedWizard 'after-activation'
+    Assert-LegacyRunning $rollbackStarted
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
+        throw 'Cross-version rollback changed existing IDs, metadata, payloads or preferences.'
+    }
+    Write-Host 'PASS: candidate migrated real v0.1.0 schema; failed upgrade restored the released executable and preserved all legacy data.'
+    $rollbackStarted = [DateTime]::UtcNow
+    Invoke-FailedWizard 'cancel-install'
+    Assert-LegacyRunning $rollbackStarted
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
+        throw 'Canceled cross-version update changed legacy history.'
+    }
+    Write-Host 'PASS: canceled cross-version update restored released executable and all legacy data.'
+    $upgradedAt = [DateTime]::UtcNow
+    Install-Wizard
+    $ready = Get-ReadyInstance $context $upgradedAt
+    if ($null -eq $ready -or -not $ready.elevated -or
+        (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $portableFile -Algorithm SHA256).Hash) {
+        throw 'Cross-version update did not start the exact candidate executable.'
+    }
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) { throw 'Cross-version update changed legacy history.' }
+    Stop-ClipPlus $context
+    & $testExe --isolated-desktop --exercise-migrated-history --database $database
+    if ($LASTEXITCODE -ne 0 -or (Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
+        throw 'Migrated history category operations failed or changed legacy data.'
+    }
+    Start-ClipPlusAndVerify $context
+    Remove-Wizard
+    $installed = $false
+    Assert-NoInstallation
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) { throw 'Cross-version uninstall changed legacy history.' }
+    # This exact directory was absent at the initial guard and contains only
+    # test-created data. Clean it so the existing lifecycle suite is independent.
+    Assert-NoReparsePoint (Split-Path -Parent $context.Data)
+    Assert-NoReparsePoint $context.Data
+    Get-ChildItem -LiteralPath $context.Data -Force | ForEach-Object {
+        Assert-NoReparsePoint $_.FullName
+        if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic legacy fixture.' }
+    }
+    Remove-Item -LiteralPath $context.Data -Recurse -Force
+    Assert-ForeignShortcut
+    Write-Host 'PASS: successful actual released-version upgrade, migrated category operations, restart and uninstall preserve 52 clips and legacy preferences.'
 
     # Execute the exact bare portable file, without the build directory,
     # companion assemblies, application config, or modern .NET host.
@@ -377,8 +465,6 @@ try {
         Set-Content -LiteralPath $readyPath -Value $savedMarker
         Remove-Item -LiteralPath $normalMarker -Force
     }
-    $testExe = Join-Path $PSScriptRoot 'ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe'
-    $database = Join-Path $context.Data 'history.db'
     & $testExe --isolated-desktop --installed-flow --shortcut WinV --database $database
     if ($LASTEXITCODE -ne 0) { throw "Installed interactive workflow failed ($LASTEXITCODE)." }
 

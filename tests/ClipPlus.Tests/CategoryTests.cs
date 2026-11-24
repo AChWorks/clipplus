@@ -112,8 +112,10 @@ public sealed class CategoryTests
         Assert.Equal((true, false), store.AvailableViews());
     }
 
-    [Fact]
-    public void LegacyDatabaseMigratesAndReopensWithoutLosingPayloadsOrSettings()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LegacyDatabaseMigratesAndReopensWithoutLosingPayloadsOrSettings(bool failFirst)
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -149,6 +151,39 @@ public sealed class CategoryTests
                 cmd.Parameters.AddWithValue("$format", (int)ClipFormat.UnicodeText);
                 cmd.Parameters.AddWithValue("$data", payload.Formats[ClipFormat.UnicodeText]);
                 cmd.ExecuteNonQuery();
+            }
+            if (failFirst)
+            {
+                // Force the schema initialization to fail after creating the
+                // categories table, with all legacy clips/formats untouched.
+                // A conflicting index name makes SQLite reject CREATE INDEX.
+                using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+                {
+                    connection.Open();
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = "DROP INDEX clips_order; CREATE TABLE clips_order(id INTEGER);";
+                    cmd.ExecuteNonQuery();
+                }
+                var error = Assert.Throws<SqliteException>(() => new ClipStore(path));
+                Assert.Contains("clips_order", error.Message);
+                using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+                {
+                    connection.Open();
+                    using var cmd = connection.CreateCommand();
+                    cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name='categories'";
+                    Assert.Equal(0L, cmd.ExecuteScalar());
+                    cmd.CommandText = "PRAGMA table_info(clips)";
+                    var columns = new List<string>();
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read()) columns.Add(reader.GetString(1));
+                    Assert.Equal(new[] { "id", "fingerprint", "title", "color", "pinned", "touched", "text", "has_image", "has_html" }, columns);
+                    cmd.CommandText = "SELECT data FROM formats WHERE clip_id=42 AND format=1";
+                    Assert.Equal(payload.Formats[ClipFormat.UnicodeText], (byte[])cmd.ExecuteScalar()!);
+                    cmd.CommandText = "SELECT fingerprint FROM clips WHERE id=42";
+                    Assert.Equal(payload.Fingerprint(), cmd.ExecuteScalar());
+                    cmd.CommandText = "DROP TABLE clips_order; CREATE INDEX clips_order ON clips(pinned DESC,touched DESC)";
+                    cmd.ExecuteNonQuery();
+                }
             }
             long category;
             long second;
