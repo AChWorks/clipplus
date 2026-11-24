@@ -1,0 +1,16 @@
+schemaVersion: achworks.dev/v1alpha1
+kind: Component
+metadata:
+  name: clipplus
+  title: ClipPlus
+  description: Minimal native Windows clipboard history manager.
+spec:
+  type: desktop-application
+  lifecycle: development
+  system: clipplus
+  ownership: AChWorks
+  documentation:
+    path: docs/
+  source:
+    repository: AChWorks/clipplus
+    url: https://github.com/AChWorks/clipplus
