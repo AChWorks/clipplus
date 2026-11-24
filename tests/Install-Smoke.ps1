@@ -95,6 +95,116 @@ function Invoke-RecoveryWizard {
     }
 }
 
+function Invoke-InterruptedWizard {
+    $result = Start-Process -FilePath $faultFile -Wait -PassThru -ArgumentList (
+        "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /TestFault=interrupt-wizard /LOG=""$faultLog""")
+    $content = Get-Content -LiteralPath $faultLog -Raw
+    if ($result.ExitCode -eq 0 -or $content -notmatch 'Test-only abrupt wizard termination after installation and before commit\.' -or
+        -not (Test-Path -LiteralPath $context.Transaction)) {
+        throw 'Abrupt wizard fixture did not leave its uncommitted transaction.'
+    }
+}
+
+function Invoke-RecoveryInterruption([string]$Boundary) {
+    # Modify only disposable copies. The normal setup and Recover action
+    # are otherwise identical to the distributed scripts.
+    $fixture = Join-Path $fixtureRoot ([Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $fixture | Out-Null
+    foreach ($name in @('Install.ps1','Setup.Common.ps1','Invoke-Setup.ps1')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../scripts/$name") -Destination $fixture
+    }
+    $script = Join-Path $fixture 'Install.ps1'
+    $source = Get-Content -LiteralPath $script -Raw
+    switch ($Boundary) {
+        'after-disposal' {
+            $anchor = '    [IO.Directory]::Move($Context.Install, $discard)'
+            $replacement = $anchor + [Environment]::NewLine + '    [Environment]::Exit(73)'
+        }
+        'after-restore' {
+            $anchor = '        [IO.Directory]::Move($backup, $Context.Install)'
+            $replacement = $anchor + [Environment]::NewLine + '        [Environment]::Exit(73)'
+        }
+        'during-cleanup' {
+            $anchor = '            Remove-Item -LiteralPath $entry.FullName -Recurse -Force'
+            # Interrupt a real terminal cleanup after deleting the failed
+            # package's ownership marker, not the live package's marker.
+            $replacement = @(
+                '            if ($entry.Name -eq ''failed-app'') {'
+                '                Remove-Item -LiteralPath (Join-Path $entry.FullName ''clipplus-install.json'') -Force'
+                '                [Environment]::Exit(73)'
+                '            }'
+                $anchor
+            ) -join [Environment]::NewLine
+        }
+        default { throw "Unknown recovery interruption: $Boundary" }
+    }
+    if ([regex]::Matches($source,[regex]::Escape($anchor)).Count -ne 1) { throw "Recovery fixture anchor changed: $Boundary" }
+    $source.Replace($anchor,$replacement) | Set-Content -LiteralPath $script -Encoding utf8BOM
+    $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
+    $result = Start-Process -FilePath $powershell -Wait -PassThru -ArgumentList (
+        "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""$fixture\Invoke-Setup.ps1"" -Action Recover -ExpectedSid ""$($context.Sid)""")
+    if ($result.ExitCode -ne 73 -or -not (Test-Path -LiteralPath $context.Transaction)) {
+        $errorPath = Join-Path $fixture 'setup-error.txt'
+        if (Test-Path -LiteralPath $errorPath) { Get-Content -LiteralPath $errorPath | Write-Host }
+        throw "Recovery did not stop at $Boundary (exit $($result.ExitCode))."
+    }
+}
+
+function Invoke-InterruptedRollback([bool]$HadPrevious) {
+    Invoke-InterruptedWizard
+    $journal = Join-Path $context.Transaction 'state.json'
+    $backup = Join-Path $context.Transaction 'previous-app'
+    $discard = Join-Path $context.Transaction 'failed-app'
+    $marker = Join-Path $discard 'clipplus-install.json'
+    $liveMarker = Join-Path $context.Install 'clipplus-install.json'
+    $state = Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json
+    if ($state.phase -ne 'activating' -or $state.hadApp -ne $HadPrevious) {
+        throw 'Unexpected interrupted wizard state.'
+    }
+    $failedHash = (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash
+    $failedMarkerHash = (Get-FileHash -LiteralPath $liveMarker -Algorithm SHA256).Hash
+
+    Invoke-RecoveryInterruption 'after-disposal'
+    if ((Test-Path -LiteralPath $context.Install) -or
+        (Test-Path -LiteralPath $backup) -ne $HadPrevious -or
+        (Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json).phase -ne 'activating' -or
+        (Get-FileHash -LiteralPath (Join-Path $discard 'ClipPlus.exe') -Algorithm SHA256).Hash -ne $failedHash -or
+        (Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash -ne $failedMarkerHash) {
+        throw 'Rollback interruption did not leave a vacant live path and intact failed package.'
+    }
+    Write-Host "PASS: rollback interrupted after atomic failed-package move (previous=$HadPrevious)."
+
+    if ($HadPrevious) {
+        Invoke-RecoveryInterruption 'after-restore'
+        if ((Test-Path -LiteralPath $backup) -or
+            (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $state.previousExeHash -or
+            (Get-FileHash -LiteralPath $liveMarker -Algorithm SHA256).Hash -ne $state.previousMarkerHash -or
+            -not (Test-Path -LiteralPath $marker -PathType Leaf) -or
+            (Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json).phase -ne 'activating') {
+            throw 'Rollback interruption did not leave the restored previous package intact.'
+        }
+        Write-Host 'PASS: repeated recovery interrupted after restoring the previous package.'
+    }
+
+    Invoke-RecoveryInterruption 'during-cleanup'
+    if ((Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json).phase -ne 'rolled-back' -or
+        -not (Test-Path -LiteralPath $discard -PathType Container) -or
+        (Test-Path -LiteralPath $marker) -or
+        (Test-Path -LiteralPath $context.Install) -ne $HadPrevious) {
+        throw 'Terminal cleanup interruption did not leave the expected partially disposed package.'
+    }
+    if ($HadPrevious -and
+        ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $state.previousExeHash -or
+         (Get-FileHash -LiteralPath $liveMarker -Algorithm SHA256).Hash -ne $state.previousMarkerHash)) {
+        throw 'Terminal cleanup modified the restored previous package.'
+    }
+    Write-Host "PASS: terminal cleanup interrupted with failed-package ownership marker already removed (previous=$HadPrevious)."
+
+    Invoke-RecoveryWizard
+    Invoke-RecoveryWizard
+    Write-Host "PASS: fresh wizard completed interrupted rollback cleanup and repeated recovery safely (previous=$HadPrevious)."
+}
+
 function Invoke-ScriptFixture([string]$Fault) {
     # Only isolated CI copies are modified. Release scripts have no test
     # switches. Environment.Exit bypasses catch/finally rollback.
@@ -187,7 +297,10 @@ function Remove-Wizard {
 
 try {
     if ((Test-Path -LiteralPath $context.Install) -or $null -ne (Get-OwnedTask $context) -or
-        (Test-Path -LiteralPath $registration)) { throw 'Runner already contains an installation; refusing to touch it.' }
+        (Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $context.Transaction) -or
+        (Test-Path -LiteralPath $context.RegistrationDir) -or (Test-Path -LiteralPath $context.Shortcut)) {
+        throw 'Runner already contains installation resources; refusing to touch them.'
+    }
 
     New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
     $shell = New-Object -ComObject WScript.Shell
@@ -226,7 +339,10 @@ try {
     Assert-NoInstallation
     Invoke-FailedWizard 'cancel-install'
     Assert-NoInstallation
-    Write-Host 'PASS: failed and canceled initial setup leave no app/task/registration.'
+    Invoke-InterruptedRollback $false
+    Assert-NoInstallation
+    Assert-ForeignShortcut
+    Write-Host 'PASS: failed, canceled and interrupted initial rollback leave no app/task/registration.'
     $elevatedStarted = [DateTime]::UtcNow
     Install-Wizard
     $installed = $true
@@ -271,6 +387,7 @@ try {
     if ($null -eq $savedPosition) { throw 'Dragged popup position was not persisted.' }
     $historyBefore = Snapshot-History
     $oldExe = (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash
+    $oldMarker = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
     $oldUninstaller = Read-Registration
     $oldUninstallHash = (Get-FileHash -LiteralPath $oldUninstaller -Algorithm SHA256).Hash
     $oldShortcutHash = (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash
@@ -279,20 +396,19 @@ try {
     $oldAppMarker = Join-Path $context.Install 'previous-package-smoke.txt'
     Set-Content -LiteralPath $oldAppMarker -Value 'only in previous package'
     $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
-    foreach ($fault in @('after-activation','cancel-install','after-move','interrupt-wizard','corrupt-payload','missing-framework','activation-failure')) {
+    foreach ($fault in @('after-activation','cancel-install','after-move','interrupt-wizard','interrupt-rollback','corrupt-payload','missing-framework','activation-failure')) {
         if ($fault -eq 'interrupt-wizard') {
-            $result = Start-Process -FilePath $faultFile -Wait -PassThru -ArgumentList (
-                "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /TestFault=$fault /LOG=""$faultLog""")
-            if ($result.ExitCode -eq 0 -or -not (Test-Path -LiteralPath $context.Transaction)) {
-                throw 'Abrupt wizard fixture did not leave its uncommitted transaction.'
-            }
+            Invoke-InterruptedWizard
             Invoke-RecoveryWizard
             Write-Host 'PASS: new wizard recovered abrupt termination before final commit.'
+        } elseif ($fault -eq 'interrupt-rollback') {
+            Invoke-InterruptedRollback $true
         } elseif ($fault -in @('after-activation','cancel-install')) { Invoke-FailedWizard $fault }
         else { Invoke-ScriptFixture $fault }
         Assert-ForeignShortcut
         $restoredUninstaller = Read-Registration
         if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $oldExe -or
+            (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarker -or
             (Get-FileHash -LiteralPath $restoredUninstaller -Algorithm SHA256).Hash -ne $oldUninstallHash -or
             (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $oldShortcutHash -or
             (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or

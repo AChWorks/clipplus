@@ -210,6 +210,21 @@ function Assert-RecoverySnapshots($Context, $State) {
     }
 }
 
+function Move-FailedPackage($Context) {
+    # Live ownership must be verified before the same-volume rename.
+    # Never recursively delete a live installation: interruption could
+    # remove its ownership marker while leaving the directory in place.
+    $discard = Join-Path $Context.Transaction 'failed-app'
+    Assert-Tree $Context.Install
+    Assert-OwnedInstall $Context $Context.Install
+    if (Test-Path -LiteralPath $discard) {
+        throw "Unexpected live package alongside a failed-package backup: $discard"
+    }
+    [IO.Directory]::Move($Context.Install, $discard)
+    # The failed package is now transaction-owned. Remove-Transaction
+    # disposes of it only after the restored state has been journaled.
+}
+
 function Undo-Activation($Context, $State) {
     Assert-RecoverySnapshots $Context $State
     $backup = Join-Path $Context.Transaction 'previous-app'
@@ -219,16 +234,14 @@ function Undo-Activation($Context, $State) {
     }
     if (Test-Path -LiteralPath $backup) {
         Assert-PreviousPackage $Context $State $backup
-        if (Test-Path -LiteralPath $Context.Install) {
-            Assert-Tree $Context.Install
-            Assert-OwnedInstall $Context $Context.Install
-            Remove-Item -LiteralPath $Context.Install -Recurse -Force
-        }
-        Move-Item -LiteralPath $backup -Destination $Context.Install
+        if (Test-Path -LiteralPath $Context.Install) { Move-FailedPackage $Context }
+        # If recovery stopped after moving the failed package, the live
+        # path is vacant. If it stopped after restoring the previous
+        # package, the backup is absent and the previous hashes are
+        # verified by Assert-RecoverySnapshots instead.
+        [IO.Directory]::Move($backup, $Context.Install)
     } elseif (-not $State.hadApp -and (Test-Path -LiteralPath $Context.Install)) {
-        Assert-Tree $Context.Install
-        Assert-OwnedInstall $Context $Context.Install
-        Remove-Item -LiteralPath $Context.Install -Recurse -Force
+        Move-FailedPackage $Context
     }
     if ($State.hadApp) { Assert-PreviousPackage $Context $State $Context.Install }
     if ($State.hadTask) {
