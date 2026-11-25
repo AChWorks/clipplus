@@ -117,8 +117,45 @@ internal static class Native
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetForegroundWindow(nint hwnd);
+    // Window styles are 32-bit on both x86 and x64. Modify only the
+    // activation flag, preserving WPF's other extended styles.
+    private const int GwlExStyle = -20, WsExNoActivate = 0x08000000;
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+    private static extern int GetWindowLong(nint hwnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
+    private static extern int SetWindowLong(nint hwnd, int index, int value);
+
+    internal static bool IsNoActivate(nint hwnd) => (GetWindowLong(hwnd, GwlExStyle) & WsExNoActivate) != 0;
+
+    internal static void SetNoActivate(nint hwnd, bool enabled)
+    {
+        var oldStyle = GetWindowLong(hwnd, GwlExStyle);
+        var style = enabled ? oldStyle | WsExNoActivate : oldStyle & ~WsExNoActivate;
+        if (style == oldStyle) return;
+        SetWindowLong(hwnd, GwlExStyle, style);
+        if (IsNoActivate(hwnd) != enabled)
+            throw new InvalidOperationException("Could not change the native window activation style.");
+    }
+
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+    // Revalidate the owning thread and process before refocusing or injecting.
+    internal sealed record PasteTarget(nint Handle, uint Thread, uint Process)
+    {
+        internal bool IsValid => IsWindow(Handle) &&
+            GetWindowThreadProcessId(Handle, out var process) == Thread && process == Process;
+        internal bool IsForeground => IsValid && GetForegroundWindow() == Handle;
+    }
+
+    internal static PasteTarget? ExternalTarget(nint hwnd)
+    {
+        if (hwnd == 0 || !IsWindow(hwnd)) return null;
+        var thread = GetWindowThreadProcessId(hwnd, out var process);
+        if (thread == 0 || process == 0) return null;
+        using var own = System.Diagnostics.Process.GetCurrentProcess();
+        return process == (uint)own.Id ? null : new PasteTarget(hwnd, thread, process);
+    }
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);

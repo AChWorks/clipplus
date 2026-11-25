@@ -93,6 +93,67 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="CategoryChoiceFocus" TargetType="Control">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Control">
+                        <Rectangle Margin="1" RadiusX="3" RadiusY="3" Stroke="{DynamicResource FocusBrush}"
+                                   StrokeThickness="1" StrokeDashArray="2 2" SnapsToDevicePixels="True"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CategoryChoiceSelectedFocus" TargetType="Control">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Control">
+                        <Rectangle Margin="1" RadiusX="3" RadiusY="3" Stroke="{DynamicResource CategorySelectedFocusBrush}"
+                                   StrokeThickness="1" StrokeDashArray="2 2" SnapsToDevicePixels="True"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CategoryChoice" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <!-- WPF draws FocusVisualStyle only for keyboard-driven focus. -->
+            <Setter Property="FocusVisualStyle" Value="{StaticResource CategoryChoiceFocus}"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Margin" Value="1.5"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="4" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SelectedBrush}"/>
+                            </Trigger>
+                            <!-- A selected category remains distinguishable while hovered. -->
+                            <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
+                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource CategorySelectedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
+                    <Setter Property="FocusVisualStyle" Value="{StaticResource CategoryChoiceSelectedFocus}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="{DynamicResource FieldBrush}"/>
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
@@ -114,6 +175,20 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+        <Style x:Key="QuickCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
+                        <Condition Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="{DynamicResource SelectedBrush}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
+                </MultiDataTrigger>
+            </Style.Triggers>
         </Style>
         <Style x:Key="ClipCard" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
@@ -145,6 +220,11 @@
             <DockPanel Grid.ColumnSpan="2" LastChildFill="True" Margin="0,0,0,8">
                 <Button x:Name="CloseButton" DockPanel.Dock="Right" Width="28" ToolTip="Close (Esc)"
                         AutomationProperties.Name="Close clipboard" Content="&#x2715;"/>
+                <Button x:Name="QuickModeButton" DockPanel.Dock="Right" Width="28" Padding="2"
+                        ToolTip="Open pinned quick-paste panel" AutomationProperties.Name="Open pinned quick-paste panel">
+                    <TextBlock Text="&#xE840;" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                </Button>
                 <Button x:Name="ClearButton" DockPanel.Dock="Right" ToolTip="Clear all recent items, including categorized items; keep pinned items"
                         AutomationProperties.Name="Clear recent items" Content="Clear"/>
                 <Border x:Name="DragHeader" Background="Transparent" Cursor="SizeAll" ToolTip="Drag to move"
@@ -163,7 +243,7 @@
                 <TextBlock x:Name="SearchPlaceholder" Text="Search clipboard..." Margin="30,0,0,0"
                            Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" IsHitTestVisible="False"/>
             </Grid>
-            <Grid Grid.Row="2" Margin="0,0,0,5">
+            <Grid x:Name="NavigationHost" Grid.Row="2" Margin="0,0,0,5">
                 <Grid x:Name="CategoryNavigation">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -275,7 +355,7 @@
             <TextBlock x:Name="StatusLabel" Grid.Row="4" Grid.ColumnSpan="2" TextWrapping="Wrap" MaxHeight="48"
                        Foreground="{DynamicResource TextBrush}" Visibility="Collapsed" Margin="0,4,0,2"
                        AutomationProperties.LiveSetting="Polite"/>
-            <Grid Grid.Row="5" Grid.ColumnSpan="2" Margin="0,5,0,0">
+            <Grid x:Name="FooterHost" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,5,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>

@@ -87,6 +87,15 @@ internal static partial class Program
             // Different row counts are intentional: v0.2.1 Pinned includes
             // unpinned recent history, while the released view did not.
             Measure("pinned-view", () => Click(pinned));
+            // The released v0.2.0 source has no quick panel. Find by name so
+            // the identical benchmark source still builds against that tag.
+            if (popup.FindName("QuickModeButton") is Button quick)
+            {
+                Measure("quick-open", () => Click(quick));
+                Measure("quick-search", () => search.Text = "benchmark");
+                Measure("quick-clear", () => search.Text = "");
+                Measure("quick-return", () => Click(quick));
+            }
             return 0;
         }
         finally

@@ -129,10 +129,10 @@ public sealed class ClipStore : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<ClipItem> List(string query = "", long? view = null)
+    public IReadOnlyList<ClipItem> List(string query = "", long? view = null, bool pinnedOnly = false)
     {
         var filter = string.IsNullOrWhiteSpace(query) ? view : null;
-        var where = filter switch
+        var where = pinnedOnly ? " WHERE pinned=1" : filter switch
         {
             PinnedView => "",
             RecentView => " WHERE pinned=0",

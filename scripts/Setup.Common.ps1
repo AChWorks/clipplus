@@ -425,6 +425,31 @@ function Remove-ShortcutHelperTask($Context) {
     Unregister-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\' -Confirm:$false
 }
 
+# The task is newly registered for one invocation. Scheduler state and info
+# are separate observations, not an atomic completion snapshot.
+function Wait-UserShortcutResult($Context, [string]$Action, [datetime]$Before) {
+    $state = 'Unknown'
+    $result = $null
+    $lastRun = $Before
+    for ($i = 0; $i -lt 80; $i++) {
+        Start-Sleep -Milliseconds 250
+        $task = Get-ShortcutHelperTask $Context
+        if ($null -eq $task) { throw "User shortcut helper task disappeared ($Action)." }
+        $state = $task.State
+        $info = Get-ScheduledTaskInfo -TaskName $Context.ShortcutTask -TaskPath '\'
+        $lastRun = $info.LastRunTime
+        $result = $info.LastTaskResult
+        # 0x41301 = SCHED_S_TASK_RUNNING; 0x41303 = HAS_NOT_RUN;
+        # 0x41325 = SCHED_S_TASK_QUEUED.
+        # Neither is a helper exit code, even when State already reads Ready.
+        if ($lastRun -eq $Before -or $state -in @('Running','Queued') -or
+            $result -in @(0x41301,0x41303,0x41325)) { continue }
+        if ($result -in @(0,10,11)) { return [int]$result }
+        throw "User shortcut operation failed ($Action, result $result)."
+    }
+    throw "Timed out waiting for the user shortcut operation ($Action, state $state, result $result, last run $lastRun)."
+}
+
 function Invoke-UserShortcut($Context, [ValidateSet('Inspect','Create','Remove','Rollback')][string]$Action, [string]$Script) {
     Assert-NoReparsePoint (Split-Path -Parent $Script)
     Assert-NoReparsePoint $Script
@@ -440,15 +465,6 @@ function Invoke-UserShortcut($Context, [ValidateSet('Inspect','Create','Remove',
     try {
         $before = (Get-ScheduledTaskInfo -TaskName $Context.ShortcutTask -TaskPath '\').LastRunTime
         Start-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\'
-        for ($i = 0; $i -lt 80; $i++) {
-            Start-Sleep -Milliseconds 250
-            $info = Get-ScheduledTaskInfo -TaskName $Context.ShortcutTask -TaskPath '\'
-            $task = Get-ShortcutHelperTask $Context
-            if ($info.LastRunTime -ne $before -and $task.State -notin @('Running','Queued')) {
-                if ($info.LastTaskResult -in @(0,10,11)) { return [int]$info.LastTaskResult }
-                throw "User shortcut operation failed ($Action, result $($info.LastTaskResult))."
-            }
-        }
-        throw "Timed out waiting for the user shortcut operation ($Action)."
+        return (Wait-UserShortcutResult $Context $Action $before)
     } finally { Remove-ShortcutHelperTask $Context }
 }

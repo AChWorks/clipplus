@@ -26,11 +26,14 @@ public partial class PopupWindow : Window
     private readonly Action<string, Exception?> _report;
     private readonly Func<Preferences> _preferences;
     private readonly Action<long, bool> _saveView;
+    private readonly Func<long, Native.PasteTarget?, Task<bool>>? _quickPaste;
+    private readonly Action<QuickGeometry>? _saveQuickGeometry;
+    private readonly HwndSourceHook _windowHook;
     private readonly Dictionary<long, Row> _rows = new();
     private ObservableCollection<HistoryEntry> _entries = new();
     // Include visual metadata so renaming a category or switching compact
     // view invalidates affected cards even when clip metadata is unchanged.
-    internal sealed record HistoryEntry(ClipItem Item, string? Heading, string? CategoryName, bool Compact);
+    internal sealed record HistoryEntry(ClipItem Item, string? Heading, string? CategoryName, bool Compact, bool Quick = false);
     private readonly DispatcherTimer _paletteTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private Row? _openPalette;
@@ -64,7 +67,8 @@ public partial class PopupWindow : Window
     }
 
     internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<double?, WindowPosition?> saveGeometry,
-        Action<string, Exception?> report, Func<Preferences> preferences, Action<long, bool> saveView)
+        Action<string, Exception?> report, Func<Preferences> preferences, Action<long, bool> saveView,
+        Func<long, Native.PasteTarget?, Task<bool>>? quickPaste = null, Action<QuickGeometry>? saveQuickGeometry = null)
     {
         _store = store;
         _paste = paste;
@@ -72,6 +76,10 @@ public partial class PopupWindow : Window
         _report = report;
         _preferences = preferences;
         _saveView = saveView;
+        _quickPaste = quickPaste;
+        _saveQuickGeometry = saveQuickGeometry;
+        // Keep the hook rooted for the entire HWND lifetime.
+        _windowHook = OnWindowMessage;
         InitializeComponent();
         ApplyTheme();
         InitializeCategories();
@@ -79,6 +87,12 @@ public partial class PopupWindow : Window
         {
             ReleaseRow(container);
             var entry = (HistoryEntry)item;
+            container.Focusable = !entry.Quick;
+            if (entry.Quick)
+            {
+                BuildQuickRow(entry, container);
+                return;
+            }
             var row = BuildRow(entry, container);
             _rows[entry.Item.Id] = row;
             container.Tag = row;
@@ -94,30 +108,41 @@ public partial class PopupWindow : Window
             Run(() =>
             {
                 DragMove();
-                if (IsVisible) FocusSearch();
+                if (IsVisible && !IsQuickMode) FocusSearch();
             });
         };
         CloseButton.Click += (_, _) => HidePopup();
+        QuickModeButton.Click += (_, _) => Run(ToggleQuickMode);
         ClearButton.Click += (_, _) => Run(() =>
         {
             _store.ClearRecent();
             Refresh();
             FocusSearch();
         });
+        SearchBox.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(OnQuickSearchMouseDown), true);
         SearchBox.TextChanged += (_, _) =>
         {
             SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
             if (!_placing) Run(() =>
             {
                 Refresh(false);
-                if (string.IsNullOrWhiteSpace(SearchBox.Text)) RevealActiveCategory();
+                if (!IsQuickMode && string.IsNullOrWhiteSpace(SearchBox.Text)) RevealActiveCategory();
             });
         };
         ClipList.SelectionChanged += (_, _) => PreviewSelected();
         PreviewKeyDown += OnKey;
         InputManager.Current.PostProcessInput += OnPostProcessInput;
         Closed += (_, _) => InputManager.Current.PostProcessInput -= OnPostProcessInput;
-        Deactivated += (_, _) => { if (!_placing && !_draggingCategory && IsVisible) HidePopup(); };
+        Deactivated += (_, _) =>
+        {
+            if (IsQuickMode)
+            {
+                _searchTarget = null;
+                Run(() => Native.SetNoActivate(Handle, true));
+                return;
+            }
+            if (!_placing && !_draggingCategory && IsVisible) HidePopup();
+        };
         _paletteTimer.Tick += (_, _) =>
         {
             _paletteTimer.Stop();
@@ -129,13 +154,29 @@ public partial class PopupWindow : Window
             }
         };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusLabel.Visibility = Visibility.Collapsed; };
-        SourceInitialized += (_, _) => HwndSource.FromHwnd(Handle)?.AddHook(OnWindowMessage);
+        SourceInitialized += (_, _) => HwndSource.FromHwnd(Handle)?.AddHook(_windowHook);
     }
 
     internal nint Handle => new WindowInteropHelper(this).Handle;
 
     private nint OnWindowMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
+        if (IsQuickMode && message == 0x0021) // WM_MOUSEACTIVATE
+        {
+            // Deliver the mouse gesture without activating. The search box
+            // explicitly activates on its own pointer-down, after capturing
+            // the still-active external window.
+            handled = true;
+            return 3; // MA_NOACTIVATE
+        }
+        if (IsQuickMode && message == 0x0006 && ((long)wParam & 0xffff) != 0) // WM_ACTIVATE
+        {
+            // Windows supplies the deactivated HWND in lParam. Unlike
+            // GetForegroundWindow during activation, it identifies the
+            // window displaced by this activation. Retain a pre-click
+            // capture only when Windows supplies no external HWND.
+            _searchTarget = Native.ExternalTarget(lParam) ?? _searchTarget;
+        }
         if (message == 0x0231) // WM_ENTERSIZEMOVE
         {
             _inMoveSize = !_placing && Native.GetWindowRect(hwnd, out _moveStart);
@@ -151,7 +192,8 @@ public partial class PopupWindow : Window
             if (!Native.GetWindowRect(hwnd, out var rect)) return 0;
             var moved = rect.Left != _moveStart.Left || rect.Top != _moveStart.Top;
             var resized = _userSizing && rect.Bottom - rect.Top != _moveStart.Bottom - _moveStart.Top;
-            if ((!moved || !(_userMoving || _userSizing)) && !resized) return 0;
+            var widthChanged = IsQuickMode && _userSizing && rect.Right - rect.Left != _moveStart.Right - _moveStart.Left;
+            if ((!moved || !(_userMoving || _userSizing)) && !resized && !widthChanged) return 0;
             var monitor = Native.MonitorFromRect(ref rect, 2);
             var scale = MonitorScale(monitor);
             double? height = resized ? (rect.Bottom - rect.Top) / scale : null;
@@ -162,9 +204,20 @@ public partial class PopupWindow : Window
                 _placing = true;
                 try
                 {
-                    var actual = PlaceWindow(hwnd, monitor, new Native.Point { X = rect.Left, Y = rect.Top },
-                        height ?? _preferences().WindowHeight, false);
-                    _saveGeometry(height, new WindowPosition(actual.X, actual.Y));
+                    var anchor = new Native.Point { X = rect.Left, Y = rect.Top };
+                    if (IsQuickMode)
+                    {
+                        var previous = _preferences().QuickPanel;
+                        var width = widthChanged ? (rect.Right - rect.Left) / scale : previous.Width;
+                        var quickHeight = height ?? previous.Height;
+                        var actual = PlaceWindow(hwnd, monitor, anchor, quickHeight, false, width);
+                        _saveQuickGeometry?.Invoke(new QuickGeometry(width, quickHeight, new WindowPosition(actual.X, actual.Y)));
+                    }
+                    else
+                    {
+                        var actual = PlaceWindow(hwnd, monitor, anchor, height ?? _preferences().WindowHeight, false);
+                        _saveGeometry(height, new WindowPosition(actual.X, actual.Y));
+                    }
                 }
                 finally { _placing = false; }
             });
@@ -172,8 +225,9 @@ public partial class PopupWindow : Window
         return 0;
     }
 
-    internal void ShowAt(Native.Point anchor)
+    internal void ShowAt(Native.Point anchor, Native.PasteTarget? target = null)
     {
+        NormalTarget = target;
         _placing = true;
         try
         {
@@ -211,7 +265,7 @@ public partial class PopupWindow : Window
                 // Retry only if activation has not already established
                 // keyboard focus. Never steal it from a category or editor
                 // selected immediately after opening the popup.
-                if (IsVisible && !IsKeyboardFocusWithin) FocusSearch();
+                if (IsVisible && !IsQuickMode && !IsKeyboardFocusWithin) FocusSearch();
             }));
         }
         finally { _placing = false; }
@@ -223,12 +277,14 @@ public partial class PopupWindow : Window
     // One placement calculation for initial contextual placement, restored
     // coordinates and the end of a native move/resize operation.
     internal static Native.Rect FitBounds(Native.Rect work, double scale, Native.Point anchor,
-        double preferredHeight, bool contextual)
+        double preferredHeight, bool contextual, double preferredWidth = 360, bool quick = false)
     {
-        var width = Math.Min(work.Right - work.Left, (int)Math.Round(360 * scale));
+        var availableWidth = work.Right - work.Left;
+        var width = Math.Min(availableWidth, (int)Math.Round(Clamp(preferredWidth,
+            Math.Min(quick ? 180 : 360, availableWidth / scale), availableWidth / scale) * scale));
         var available = work.Bottom - work.Top;
         var height = Math.Min(available, (int)Math.Round(Clamp(preferredHeight,
-            Math.Min(240, available / scale), available / scale) * scale));
+            Math.Min(quick ? 150 : 240, available / scale), available / scale) * scale));
         var x = Clamp(anchor.X, work.Left, work.Right - width);
         var y = !contextual || (long)anchor.Y + height <= work.Bottom
             ? (long)anchor.Y : (long)anchor.Y - height;
@@ -236,24 +292,24 @@ public partial class PopupWindow : Window
         return new Native.Rect { Left = x, Top = top, Right = x + width, Bottom = top + height };
     }
 
-    private Native.Point PlaceWindow(nint hwnd, nint monitor, Native.Point anchor, double preferredHeight, bool contextual)
+    private Native.Point PlaceWindow(nint hwnd, nint monitor, Native.Point anchor, double preferredHeight, bool contextual, double preferredWidth = 360)
     {
         var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
         if (monitor == 0 || !Native.GetMonitorInfo(monitor, ref info))
             throw Native.Error("GetMonitorInfo");
         var scale = MonitorScale(monitor);
         var work = info.Work;
-        var width = Math.Min(360.0, (work.Right - work.Left) / scale);
+        var availableWidth = (work.Right - work.Left) / scale;
         var available = (work.Bottom - work.Top) / scale;
         MinWidth = 0;
-        MaxWidth = width;
-        MinWidth = width;
-        Width = width;
+        MaxWidth = IsQuickMode ? availableWidth : Math.Min(360, availableWidth);
+        MinWidth = Math.Min(IsQuickMode ? 180 : 360, MaxWidth);
+        Width = Clamp(preferredWidth, MinWidth, MaxWidth);
         MinHeight = 0;
         MaxHeight = available;
-        MinHeight = Math.Min(240, available);
+        MinHeight = Math.Min(IsQuickMode ? 150 : 240, available);
         Height = Clamp(preferredHeight, MinHeight, MaxHeight);
-        var bounds = FitBounds(work, scale, anchor, preferredHeight, contextual);
+        var bounds = FitBounds(work, scale, anchor, preferredHeight, contextual, preferredWidth, IsQuickMode);
         if (!Native.SetWindowPos(hwnd, 0, bounds.Left, bounds.Top,
             bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, 0x0014))
             throw Native.Error("SetWindowPos");
@@ -269,6 +325,8 @@ public partial class PopupWindow : Window
         _refreshPending = false;
         _reconcileRequested = false;
         if (IsVisible) Hide();
+        if (IsQuickMode) ResetQuickMode();
+        NormalTarget = null;
     }
 
     internal void FocusSearch()
@@ -348,7 +406,11 @@ public partial class PopupWindow : Window
 
     private void ReleaseRow(ListBoxItem container)
     {
-        if (container.Tag is not Row row) return;
+        if (container.Tag is not Row row)
+        {
+            container.Content = null;
+            return;
+        }
         if (_editingRow == row) EndTitle(false, false);
         if (_openPalette == row) ClosePalette(false);
         if (_openCategoryRow == row) CloseCategoryPicker(false);
@@ -391,6 +453,11 @@ public partial class PopupWindow : Window
             ClosePalette(false);
             CloseCategoryPicker(false);
             EndCategoryEdit();
+            if (IsQuickMode)
+            {
+                RefreshQuick(preserveSelection, previous);
+                return;
+            }
             var available = _store.AvailableViews();
             SyncCategoryBar(available.Pinned);
             var items = _store.List(SearchBox.Text, _activeView);
@@ -746,6 +813,11 @@ public partial class PopupWindow : Window
 
     private async void OnKey(object sender, KeyEventArgs e)
     {
+        if (IsQuickMode)
+        {
+            await OnQuickKey(e);
+            return;
+        }
         if (_categoryEditor is not null && _categoryEditHost?.IsKeyboardFocusWithin == true)
         {
             if (e.Key == Key.Escape || e.Key == Key.Enter && Keyboard.FocusedElement is TextBox)
@@ -796,7 +868,7 @@ public partial class PopupWindow : Window
 
     private void PreviewSelected()
     {
-        if (_refreshing || Selected is not { } selected ||
+        if (IsQuickMode || _refreshing || Selected is not { } selected ||
             !_rows.TryGetValue(selected.Item.Id, out var row)) return;
         LoadPreview(row);
     }
@@ -866,7 +938,13 @@ public partial class PopupWindow : Window
                 "AppsUseLightTheme", 1) is int value && value == 0;
         }
         catch (System.Security.SecurityException) { }
-        var highContrast = SystemParameters.HighContrast;
+        return ApplyTheme(dark, SystemParameters.HighContrast);
+    }
+
+    // Keep resource application independent of OS preference discovery so
+    // the real mapping can also be exercised on an isolated test window.
+    internal bool ApplyTheme(bool dark, bool highContrast)
+    {
         if (_themeApplied && _dark == dark && !_highContrast && !highContrast) return false;
         _themeApplied = true;
         _dark = dark;

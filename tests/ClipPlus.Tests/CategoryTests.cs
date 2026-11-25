@@ -7,6 +7,55 @@ namespace ClipPlus.Tests;
 public sealed class CategoryTests
 {
     [Fact]
+    public void QuickSearchUsesOnlyActualPinsAndRanksTitlesFirst()
+    {
+        using var store = new ClipStore(":memory:");
+        var work = store.CreateCategory("Work");
+        var title = store.Capture(ClipPayload.FromText("original payload"));
+        store.SetPinned(title, true);
+        store.SetTitle(title, "Match عنوان");
+        store.SetCategory(title, work);
+        var content = store.Capture(ClipPayload.FromText("MATCH عنوان in payload"));
+        store.SetPinned(content, true);
+        var recent = store.Capture(ClipPayload.FromText("match recent"));
+        store.SetTitle(recent, "Match recent title");
+        var other = store.Capture(ClipPayload.FromText("untitled private text"));
+        store.SetPinned(other, true);
+        Assert.Equal(new[] { other, content, title }, store.List(pinnedOnly: true).Select(c => c.Id));
+        Assert.Equal(new[] { title, content }, store.List("match", pinnedOnly: true).Select(c => c.Id));
+        Assert.Equal(new[] { title, content }, store.List("عنوان", view: ClipStore.RecentView, pinnedOnly: true).Select(c => c.Id));
+        Assert.Equal(other, Assert.Single(store.List("private text", pinnedOnly: true)).Id);
+        Assert.Empty(store.List("No Title", pinnedOnly: true));
+        Assert.Empty(store.List("missing", pinnedOnly: true));
+        Assert.Equal("original payload", store.Read(title)!.Text);
+        store.SetPinned(content, false);
+        Assert.Equal(title, Assert.Single(store.List("match", pinnedOnly: true)).Id);
+        Assert.Equal(new[] { title, recent, content }, store.List("match").Select(c => c.Id));
+    }
+
+    [Fact]
+    public void QuickGeometryPersistsIndependentlyAndOldPreferencesLoad()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "settings.json");
+        try
+        {
+            File.WriteAllText(path, "{\"WindowHeight\":650,\"WindowPosition\":{\"X\":-400,\"Y\":50}}");
+            var original = Preferences.Load(path);
+            Assert.Equal(650, original.WindowHeight);
+            Assert.Equal(new WindowPosition(-400, 50), original.WindowPosition);
+            Assert.Equal(new QuickGeometry(260, 420, null), original.QuickPanel);
+            var updated = original with { QuickPanel = new QuickGeometry(280, 350, new WindowPosition(120, 30)) };
+            updated.Save(path);
+            Assert.Equal(updated, Preferences.Load(path));
+            Assert.Equal(original.WindowPosition, updated.WindowPosition);
+            Assert.Equal(original.WindowHeight, updated.WindowHeight);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public void ViewsAndGlobalSearchPreservePinAndTitleOrdering()
     {
         using var store = new ClipStore(":memory:");

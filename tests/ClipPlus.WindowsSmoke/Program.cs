@@ -35,6 +35,7 @@ internal static partial class Program
         if (args.Contains("--exercise-migrated-history")) return LegacyHistoryFixture.Exercise(args);
         if (args.Contains("--snapshot-state"))
             return InstalledFlow.SnapshotState(args);
+        if (args.Contains("--quick-target")) return InstalledFlow.RunQuickTarget(args);
         if (args.Contains("--installed-flow"))
             return InstalledFlow.Run(args);
 
@@ -305,6 +306,7 @@ internal static partial class Program
             VerifyAppearance(popup, store);
             popup.HidePopup();
             popup.Close();
+            VerifyQuickVisual();
             Console.WriteLine("Windows smoke checks completed; physical hotkey, interactive paste, elevation, resize and lifecycle still require desktop acceptance.");
             return 0;
         }
@@ -341,6 +343,8 @@ internal static partial class Program
         store.SetTitle(clip, "Theme test");
         var category = store.CreateCategory("دسته نمونه");
         store.SetCategory(clip, category);
+        foreach (var name in new[] { "Project Alpha", "نمونه دوم", "Long category name", "Personal" })
+            store.CreateCategory(name);
         try
         {
             foreach (var light in new[] { 1, 0 })
@@ -357,6 +361,32 @@ internal static partial class Program
                 Check(background.Color.R == (light == 1 ? 245 : 32) && selected.Color != hover.Color,
                     $"actual WPF appearance follows Windows user {(light == 1 ? "light" : "dark")} preference");
                 SavePopupEvidence(popup, light == 1 ? "categories-light" : "categories-dark");
+                var change = Descendants<Button>(popup).Single(b => AutomationProperties.GetName(b) == "Change category: دسته نمونه");
+                var point = change.PointToScreen(new Point(change.ActualWidth / 2, change.ActualHeight / 2));
+                Check(Native.SetCursorPos((int)point.X, (int)point.Y), "move pointer to category picker");
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
+                InstalledFlow.SendMouse(0x0002);
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(60));
+                InstalledFlow.SendMouse(0x0004);
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(120));
+                popup.UpdateLayout();
+                var choices = Descendants<Button>(popup).Where(b => b.IsVisible &&
+                    (AutomationProperties.GetName(b).StartsWith("Assign to ", StringComparison.Ordinal) ||
+                     AutomationProperties.GetName(b) == "No category")).ToList();
+                Check(choices.Count == 5 + 1 && choices.All(b => b.BorderThickness == new Thickness(0) &&
+                    b.Margin.Top == b.Margin.Bottom && b.Margin.Left == b.Margin.Right),
+                    "wrapped category picker has borderless balanced choices");
+                SavePopupEvidence(popup, light == 1 ? "categories-picker-light" : "categories-picker-dark");
+                InstalledFlow.SendKeys(InstalledFlow.KeyInput(0x09), InstalledFlow.KeyInput(0x09, true));
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
+                Check(choices.Any(b => b.IsKeyboardFocused && b.FocusVisualStyle is not null),
+                    "category picker retains keyboard focus navigation");
+                SavePopupEvidence(popup, light == 1 ? "categories-picker-keyboard-light" : "categories-picker-keyboard-dark");
+                var toggle = (Button)popup.FindName("QuickModeButton");
+                toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, toggle));
+                popup.UpdateLayout();
+                SavePopupEvidence(popup, light == 1 ? "quick-light" : "quick-dark");
+                toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, toggle));
             }
         }
         finally

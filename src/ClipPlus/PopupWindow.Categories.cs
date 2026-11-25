@@ -429,8 +429,8 @@ public partial class PopupWindow
                     Text = selected ? "✓ " + name : name, MaxWidth = 170,
                     TextTrimming = TextTrimming.CharacterEllipsis, FlowDirection = TextDirection(name)
                 },
-                Style = (Style)FindResource("CategoryChip"), Padding = new Thickness(5, 2, 5, 2),
-                Margin = new Thickness(0, 0, 3, 3), ToolTip = name
+                Style = (Style)FindResource("CategoryChoice"), Padding = new Thickness(6, 3, 6, 3),
+                ToolTip = name
             };
             SetTabState(button, selected);
             var actionName = id.HasValue ? $"Assign to {name}" : "No category";
