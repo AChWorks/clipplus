@@ -46,10 +46,12 @@ internal static partial class Program
                 store.SetCategory(id, i % 2 == 0 ? category : second);
                 if (i < 5) store.SetPinned(id, true);
             }
-            // Use the actual pre-v0.2.2 settings shape, without the new quick geometry.
-            var legacySettings = new { WindowHeight = name == "normal" ? 410 : 470,
-                WindowPosition = new WindowPosition(25, 40), CompactView = name == "normal",
-                ActiveView = category, Shortcut = "CtrlShiftV" };
+            // Match the exact serialized property order and value types of the
+            // released Preferences record. v0.2.0 rewrites settings at startup;
+            // the fixture must survive that rewrite byte for byte.
+            var legacySettings = new { WindowHeight = name == "normal" ? 410d : 470d,
+                WindowPosition = new WindowPosition(25, 40), Shortcut = "CtrlShiftV",
+                CompactView = name == "normal", ActiveView = (long?)category };
             File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(legacySettings,
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             return 0;

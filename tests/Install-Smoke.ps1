@@ -435,6 +435,39 @@ function Invoke-ScriptFixture([string]$Fault, [switch]$Released) {
     }
 }
 
+function Snapshot-Profile([string]$Db) {
+    $output = & $testExe --isolated-desktop --snapshot-v020-profile --database $Db
+    if ($LASTEXITCODE -ne 0 -or $output -notmatch '^[0-9A-F]{64}$') { throw 'Could not snapshot full synthetic profile.' }
+    return [string]$output
+}
+$normalDb = Join-Path $context.NormalData 'history.db'
+
+function Assert-UnchangedProfiles([string]$AdminBefore, [string]$NormalBefore, [string]$Stage) {
+    $adminAfter = Snapshot-Profile $database
+    $normalAfter = Snapshot-Profile $normalDb
+    if ($adminAfter -ne $AdminBefore -or $normalAfter -ne $NormalBefore) {
+        $changes = @()
+        if ($adminAfter -ne $AdminBefore) { $changes += "protected profile ($AdminBefore -> $adminAfter)" }
+        if ($normalAfter -ne $NormalBefore) { $changes += "normal profile ($NormalBefore -> $normalAfter)" }
+        throw "$Stage changed: $($changes -join ', ')."
+    }
+}
+
+function Clear-SyntheticProfiles {
+    # Both paths were absent at the initial guard. This helper is called
+    # only after verified uninstall on the isolated runner.
+    Assert-NoInstallation
+    foreach ($dir in @($context.Data,$context.NormalData)) {
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        Assert-NoReparsePoint (Split-Path -Parent $dir)
+        Assert-NoReparsePoint $dir
+        Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+            Assert-NoReparsePoint $_.FullName
+            if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic profile fixture.' }
+        }
+        Remove-Item -LiteralPath $dir -Recurse -Force
+    }
+}
 function Snapshot-History {
     $output = & $testExe --isolated-desktop --snapshot-state --database $database
     if ($LASTEXITCODE -ne 0 -or $output -notmatch '^[0-9A-F]{64}$') { throw 'Could not snapshot retained synthetic history.' }
@@ -515,282 +548,10 @@ try {
     Assert-ForeignShortcut
     Write-Host 'PASS: setup preserved an unrelated per-user ClipPlus.lnk and refused installation.'
 
-    # Real released-version upgrade and rollback: verify both the old setup
-    # and its installed executable by their immutable release checksums.
-    # Use only the newly created synthetic fixture on this isolated runner.
+    # Run the new installed application interactions before the long
+    # migration matrix, so an interaction failure is localized promptly.
     & $testExe --isolated-desktop --empty-fixture-clipboard
-    if ($LASTEXITCODE -ne 0) { throw 'Could not empty isolated clipboard before legacy installation.' }
-    $legacyStarted = [DateTime]::UtcNow
-    Invoke-Wizard $legacyFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
-    $installed = $true
-    Assert-LegacyRunning $legacyStarted
-    Stop-ClipPlus $context
-    & $testExe --isolated-desktop --seed-legacy-history --database $database
-    if ($LASTEXITCODE -ne 0) { throw 'Could not seed actual released-version database.' }
-    $legacyBaseline = Snapshot-LegacyHistory
-    Start-ClipPlusAndVerify $context
-    if ((Snapshot-LegacyHistory) -ne $legacyBaseline) { throw 'Released application altered fixture before upgrade.' }
-
-    $rollbackStarted = [DateTime]::UtcNow
-    Invoke-FailedWizard 'after-activation'
-    Assert-LegacyRunning $rollbackStarted
-    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
-        throw 'Cross-version rollback changed existing IDs, metadata, payloads or preferences.'
-    }
-    Write-Host 'PASS: candidate migrated real v0.1.0 schema; failed upgrade restored the released executable and preserved all legacy data.'
-    $rollbackStarted = [DateTime]::UtcNow
-    Invoke-FailedWizard 'cancel-install'
-    Assert-LegacyRunning $rollbackStarted
-    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
-        throw 'Canceled cross-version update changed legacy history.'
-    }
-    Write-Host 'PASS: canceled cross-version update restored released executable and all legacy data.'
-    $upgradedAt = [DateTime]::UtcNow
-    Install-Wizard
-    $ready = Get-ReadyInstance $context $upgradedAt
-    if ($null -eq $ready -or -not $ready.elevated -or
-        (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne
-        (Get-FileHash -LiteralPath $portableFile -Algorithm SHA256).Hash) {
-        throw 'Cross-version update did not start the exact candidate executable.'
-    }
-    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) { throw 'Cross-version update changed legacy history.' }
-    Stop-ClipPlus $context
-    & $testExe --isolated-desktop --exercise-migrated-history --database $database
-    if ($LASTEXITCODE -ne 0 -or (Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
-        throw 'Migrated history category operations failed or changed legacy data.'
-    }
-    Start-ClipPlusAndVerify $context
-    Remove-Wizard
-    $installed = $false
-    Assert-NoInstallation
-    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) { throw 'Cross-version uninstall changed legacy history.' }
-    # This exact directory was absent at the initial guard and contains only
-    # test-created data. Clean it so the existing lifecycle suite is independent.
-    Assert-NoReparsePoint (Split-Path -Parent $context.Data)
-    Assert-NoReparsePoint $context.Data
-    Get-ChildItem -LiteralPath $context.Data -Force | ForEach-Object {
-        Assert-NoReparsePoint $_.FullName
-        if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic legacy fixture.' }
-    }
-    Remove-Item -LiteralPath $context.Data -Recurse -Force
-    Assert-ForeignShortcut
-    Write-Host 'PASS: successful actual released-version upgrade, migrated category operations, restart and uninstall preserve 52 clips and legacy preferences.'
-
-    # Exact released v0.2.0 -> candidate, with both separate profiles.
-    # Cover a disabled logon trigger and Limited choice even on unsplit tokens.
-    function Snapshot-Profile([string]$Db) {
-        $output = & $testExe --isolated-desktop --snapshot-v020-profile --database $Db
-        if ($LASTEXITCODE -ne 0 -or $output -notmatch '^[0-9A-F]{64}$') { throw 'Could not snapshot full synthetic profile.' }
-        return [string]$output
-    }
-    $normalDb = Join-Path $context.NormalData 'history.db'
-    foreach ($level in @('Highest','Limited')) {
-        & $testExe --isolated-desktop --empty-fixture-clipboard
-        if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before profile fixture.' }
-        $choice = if ($level -eq 'Highest') { '/TASKS=elevated' } else { '/TASKS=""' }
-        $started = [DateTime]::UtcNow
-        Invoke-Wizard $previousFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART $choice /LOG=""$log"""
-        $installed = $true
-        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
-            -not (Test-OwnedLegacyShortcut $context) -or (Test-Path -LiteralPath $context.Shortcut) -or
-            (Get-OwnedTask $context).Principal.RunLevel -ne $level) {
-            throw 'Expected released v0.2.0 and its exact common shortcut.'
-        }
-        Stop-ClipPlus $context
-        & $testExe --isolated-desktop --seed-v020-profile --database $database --profile administrator
-        if ($LASTEXITCODE -ne 0) { throw 'Could not seed protected profile.' }
-        & $testExe --isolated-desktop --seed-v020-profile --database $normalDb --profile normal
-        if ($LASTEXITCODE -ne 0) { throw 'Could not seed normal profile.' }
-        $adminBefore = Snapshot-Profile $database
-        $normalBefore = Snapshot-Profile $normalDb
-        $oldLinkHash = (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash
-        $auto = $level -eq 'Highest'
-        $trigger = (Get-OwnedTask $context).Triggers[0]
-        $trigger.Enabled = $auto
-        Set-ScheduledTask -TaskName $context.Task -TaskPath '\' -Trigger $trigger | Out-Null
-        Start-ClipPlusAndVerify $context
-        if ($level -eq 'Highest') {
-            Invoke-ScriptFixture 'after-move' -Released
-            if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
-                (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
-                (Get-OwnedTask $context).Principal.RunLevel -ne $level -or
-                (Get-StartupEnabled (Get-OwnedTask $context)) -ne $auto -or
-                (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-                throw 'Recovery of released v0.2.0 transaction changed installation or profile.'
-            }
-            Write-Host 'PASS: recovered an interrupted journal generated by exact released v0.2.0 source.'
-            $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
-            $oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
-            $oldUninstallerHash = (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash
-            Invoke-ScriptFixture 'shortcut-after-stage'
-            if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
-                (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
-                (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarkerHash -or
-                (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash -ne $oldUninstallerHash -or
-                (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
-                (Get-OwnedTask $context).State -ne 'Running' -or
-                (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-                throw 'Interrupted shortcut migration did not restore exact released resources and both histories.'
-            }
-            Write-Host 'PASS: interrupted v0.2.0 shortcut migration restored prior executable, marker, task XML, registration, legacy shortcut and both complete histories.'
-        }
-        Invoke-FailedWizard 'after-activation' ''
-        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
-            (Get-OwnedTask $context).Principal.RunLevel -ne $level -or
-            (Get-StartupEnabled (Get-OwnedTask $context)) -ne $auto -or
-            (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
-            (Test-Path -LiteralPath $context.Shortcut) -or
-            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-            throw 'v0.2.0 rollback changed prior startup, shortcut or profile.'
-        }
-        Write-Host "PASS: actual v0.2.0 rollback ($level, logon=$auto) restored exact prior resources and both complete histories."
-        # No /TASKS: preserve actual task state rather than Inno's former checkbox history.
-        Invoke-Wizard $setupFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$log"""
-        if ((Get-OwnedTask $context).Principal.RunLevel -ne $level -or
-            (Get-StartupEnabled (Get-OwnedTask $context)) -ne $auto -or
-            -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
-            (Test-Path -LiteralPath $context.LegacyShortcut) -or
-            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-            throw 'v0.2.0 update changed startup, shortcut or profile.'
-        }
-        Assert-ForeignShortcut
-        $ready = Get-ReadyInstance $context ([DateTime]::MinValue)
-        $appPid = $ready.pid
-        $scheduler = New-Object -ComObject Schedule.Service
-        $scheduler.Connect()
-        $taskFolder = $scheduler.GetFolder('\')
-        $taskDacl = $taskFolder.GetTask($context.Task).GetSecurityDescriptor(4)
-        foreach ($setting in @('off','on','off')) {
-            $helperExit = Invoke-StartupSetting "$setting"
-            if ($helperExit -ne 0 -or
-                (Get-StartupEnabled (Get-OwnedTask $context)) -ne ($setting -eq 'on') -or
-                (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
-                throw "Runtime startup toggle failed ($setting, exit $helperExit) or did not preserve the running process."
-            }
-        }
-        $otherMode = if ($level -eq 'Highest') { 'normal' } else { 'administrator' }
-        $originalMode = if ($level -eq 'Highest') { 'administrator' } else { 'normal' }
-        foreach ($mode in @($otherMode,$originalMode)) {
-            $helperExit = Invoke-StartupSetting "$mode"
-            $expectedLevel = if ($mode -eq 'administrator') { 'Highest' } else { 'Limited' }
-            if ($helperExit -ne 0 -or
-                (Get-OwnedTask $context).Principal.RunLevel -ne $expectedLevel -or
-                (Get-StartupEnabled (Get-OwnedTask $context)) -or
-                (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
-                throw "Runtime privilege choice failed ($mode, exit $helperExit) or altered active process/startup preference."
-            }
-        }
-        if ($taskFolder.GetTask($context.Task).GetSecurityDescriptor(4) -ne $taskDacl) {
-            throw 'Runtime startup changes altered task access permissions.'
-        }
-        Stop-ClipPlus $context
-        $launched = [DateTime]::UtcNow
-        Start-Process -FilePath $context.Shortcut
-        $ready = $null
-        for ($i = 0; $i -lt 40 -and $null -eq $ready; $i++) {
-            Start-Sleep -Milliseconds 250
-            $ready = Get-ReadyInstance $context $launched
-        }
-        if ($null -eq $ready -or (Get-StartupEnabled (Get-OwnedTask $context))) {
-            throw 'Disabled automatic startup prevented manual Start Menu launch.'
-        }
-        if ((Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-            throw 'Manual launch or startup toggle modified existing profile data.'
-        }
-        $helperExit = Invoke-StartupSetting "on"
-        if ($helperExit -ne 0 -or -not (Get-StartupEnabled (Get-OwnedTask $context))) {
-            throw "Could not re-enable logon startup (exit $helperExit)."
-        }
-        Stop-ClipPlus $context
-        Start-ClipPlusAndVerify $context
-        if (-not (Get-StartupEnabled (Get-OwnedTask $context)) -or
-            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-            throw 'Re-enabled startup did not persist or restart changed history.'
-        }
-        # The old Inno uninstall log must not remove a reused common link.
-        $reused = $shell.CreateShortcut($context.LegacyShortcut)
-        $reused.TargetPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'notepad.exe'
-        $reused.Save()
-        $reusedHash = (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash
-        Remove-Wizard
-        $installed = $false
-        if ((Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $reusedHash -or
-            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-            throw 'Uninstall modified the unrelated reused shortcut or profile data.'
-        }
-        Remove-Item -LiteralPath $context.LegacyShortcut -Force
-        Assert-NoInstallation
-        Assert-ForeignShortcut
-        Write-Host "PASS: actual v0.2.0 update ($level, logon=$auto), runtime toggling, manual launch and uninstall preserve both histories."
-        # These exact directories were absent at the initial guard and
-        # contain only the lifecycle runner's synthetic data.
-        foreach ($dir in @($context.Data,$context.NormalData)) {
-            Assert-NoReparsePoint $dir
-            Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
-                Assert-NoReparsePoint $_.FullName
-                if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic profile fixture.' }
-            }
-            Remove-Item -LiteralPath $dir -Recurse -Force
-        }
-    }
-
-    # Upgrade the current published release with its existing user shortcut.
-    # Its installer is unmodified; an old helper failure is visible, not retried away.
-    & $testExe --isolated-desktop --empty-fixture-clipboard
-    if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }
-    Invoke-Wizard $stableFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
-    $installed = $true
-    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $stableExeHash -or
-        -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
-        (Test-Path -LiteralPath $context.LegacyShortcut)) {
-        throw 'Expected exact released v0.2.1 and its user shortcut.'
-    }
-    Stop-ClipPlus $context
-    & $testExe --isolated-desktop --seed-v020-profile --database $database --profile administrator
-    if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable protected profile.' }
-    & $testExe --isolated-desktop --seed-v020-profile --database $normalDb --profile normal
-    if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable normal profile.' }
-    $adminBefore = Snapshot-Profile $database
-    $normalBefore = Snapshot-Profile $normalDb
-    $oldLinkHash = (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash
-    $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
-    $oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
-    $oldUninstallerHash = (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash
-    Start-ClipPlusAndVerify $context
-    Invoke-FailedWizard 'after-activation' ''
-    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $stableExeHash -or
-        (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
-        (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
-        (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarkerHash -or
-        (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash -ne $oldUninstallerHash -or
-        (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-        throw 'v0.2.1 rollback did not preserve exact prior resources and both profiles.'
-    }
-    Install-Wizard
-    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $portableFile -Algorithm SHA256).Hash -or
-        -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
-        (Get-OwnedTask $context).Principal.RunLevel -ne 'Highest' -or
-        -not (Get-StartupEnabled (Get-OwnedTask $context)) -or
-        (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-        throw 'v0.2.1 update changed existing profiles, startup or shortcut.'
-    }
-    Remove-Wizard
-    $installed = $false
-    if ((Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-        throw 'v0.2.1 upgrade/uninstall did not preserve both profiles.'
-    }
-    Assert-NoInstallation
-    Assert-ForeignShortcut
-    foreach ($dir in @($context.Data,$context.NormalData)) {
-        Assert-NoReparsePoint $dir
-        Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
-            Assert-NoReparsePoint $_.FullName
-            if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic stable profile fixture.' }
-        }
-        Remove-Item -LiteralPath $dir -Recurse -Force
-    }
-    Write-Host 'PASS: exact published v0.2.1 rollback, update and uninstall preserve both complete profiles and owned resources.'
-
+    if ($LASTEXITCODE -ne 0) { throw 'Could not empty isolated clipboard before candidate lifecycle.' }
     # Execute the exact bare portable file, without the build directory,
     # companion assemblies, application config, or modern .NET host.
     $portableProcess = Start-Process -FilePath $portableFile -ArgumentList '--startup' -PassThru
@@ -942,6 +703,286 @@ try {
     }
     Remove-Wizard
     $installed = $false
+    Clear-SyntheticProfiles
+    Assert-ForeignShortcut
+    # Real released-version upgrade and rollback: verify both the old setup
+    # and its installed executable by their immutable release checksums.
+    # Use only the newly created synthetic fixture on this isolated runner.
+    & $testExe --isolated-desktop --empty-fixture-clipboard
+    if ($LASTEXITCODE -ne 0) { throw 'Could not empty isolated clipboard before legacy installation.' }
+    $legacyStarted = [DateTime]::UtcNow
+    Invoke-Wizard $legacyFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
+    $installed = $true
+    Assert-LegacyRunning $legacyStarted
+    Stop-ClipPlus $context
+    & $testExe --isolated-desktop --seed-legacy-history --database $database
+    if ($LASTEXITCODE -ne 0) { throw 'Could not seed actual released-version database.' }
+    $legacyBaseline = Snapshot-LegacyHistory
+    Start-ClipPlusAndVerify $context
+    if ((Snapshot-LegacyHistory) -ne $legacyBaseline) { throw 'Released application altered fixture before upgrade.' }
+
+    $rollbackStarted = [DateTime]::UtcNow
+    Invoke-FailedWizard 'after-activation'
+    Assert-LegacyRunning $rollbackStarted
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
+        throw 'Cross-version rollback changed existing IDs, metadata, payloads or preferences.'
+    }
+    Write-Host 'PASS: candidate migrated real v0.1.0 schema; failed upgrade restored the released executable and preserved all legacy data.'
+    $rollbackStarted = [DateTime]::UtcNow
+    Invoke-FailedWizard 'cancel-install'
+    Assert-LegacyRunning $rollbackStarted
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
+        throw 'Canceled cross-version update changed legacy history.'
+    }
+    Write-Host 'PASS: canceled cross-version update restored released executable and all legacy data.'
+    $upgradedAt = [DateTime]::UtcNow
+    Install-Wizard
+    $ready = Get-ReadyInstance $context $upgradedAt
+    if ($null -eq $ready -or -not $ready.elevated -or
+        (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $portableFile -Algorithm SHA256).Hash) {
+        throw 'Cross-version update did not start the exact candidate executable.'
+    }
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) { throw 'Cross-version update changed legacy history.' }
+    Stop-ClipPlus $context
+    & $testExe --isolated-desktop --exercise-migrated-history --database $database
+    if ($LASTEXITCODE -ne 0 -or (Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) {
+        throw 'Migrated history category operations failed or changed legacy data.'
+    }
+    Start-ClipPlusAndVerify $context
+    Remove-Wizard
+    $installed = $false
+    Assert-NoInstallation
+    if ((Snapshot-LegacyHistory -Migrated) -ne $legacyBaseline) { throw 'Cross-version uninstall changed legacy history.' }
+    # This exact directory was absent at the initial guard and contains only
+    # test-created data. Clean it so the existing lifecycle suite is independent.
+    Assert-NoReparsePoint (Split-Path -Parent $context.Data)
+    Assert-NoReparsePoint $context.Data
+    Get-ChildItem -LiteralPath $context.Data -Force | ForEach-Object {
+        Assert-NoReparsePoint $_.FullName
+        if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic legacy fixture.' }
+    }
+    Remove-Item -LiteralPath $context.Data -Recurse -Force
+    Assert-ForeignShortcut
+    Write-Host 'PASS: successful actual released-version upgrade, migrated category operations, restart and uninstall preserve 52 clips and legacy preferences.'
+
+    # Exact released v0.2.0 -> candidate, with both separate profiles.
+    # Cover a disabled logon trigger and Limited choice even on unsplit tokens.
+    foreach ($level in @('Highest','Limited')) {
+        & $testExe --isolated-desktop --empty-fixture-clipboard
+        if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before profile fixture.' }
+        $choice = if ($level -eq 'Highest') { '/TASKS=elevated' } else { '/TASKS=""' }
+        $started = [DateTime]::UtcNow
+        Invoke-Wizard $previousFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART $choice /LOG=""$log"""
+        $installed = $true
+        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
+            -not (Test-OwnedLegacyShortcut $context) -or (Test-Path -LiteralPath $context.Shortcut) -or
+            (Get-OwnedTask $context).Principal.RunLevel -ne $level) {
+            throw 'Expected released v0.2.0 and its exact common shortcut.'
+        }
+        Stop-ClipPlus $context
+        & $testExe --isolated-desktop --seed-v020-profile --database $database --profile administrator
+        if ($LASTEXITCODE -ne 0) { throw 'Could not seed protected profile.' }
+        & $testExe --isolated-desktop --seed-v020-profile --database $normalDb --profile normal
+        if ($LASTEXITCODE -ne 0) { throw 'Could not seed normal profile.' }
+        $adminBefore = Snapshot-Profile $database
+        $normalBefore = Snapshot-Profile $normalDb
+        $oldLinkHash = (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash
+        $auto = $level -eq 'Highest'
+        $trigger = (Get-OwnedTask $context).Triggers[0]
+        $trigger.Enabled = $auto
+        Set-ScheduledTask -TaskName $context.Task -TaskPath '\' -Trigger $trigger | Out-Null
+        Start-ClipPlusAndVerify $context
+        Assert-UnchangedProfiles $adminBefore $normalBefore "Released v0.2.0 startup ($level)"
+        if ($level -eq 'Highest') {
+            Invoke-ScriptFixture 'after-move' -Released
+            Assert-UnchangedProfiles $adminBefore $normalBefore 'Released v0.2.0 journal recovery'
+            if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash) {
+                throw 'Recovery of released v0.2.0 transaction changed executable.'
+            }
+            if ((Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash) {
+                throw 'Recovery of released v0.2.0 transaction changed legacy shortcut.'
+            }
+            $restored = Get-OwnedTask $context
+            if ($restored.Principal.RunLevel -ne $level -or (Get-StartupEnabled $restored) -ne $auto) {
+                throw "Recovery of released v0.2.0 transaction changed startup (level $($restored.Principal.RunLevel), enabled $(Get-StartupEnabled $restored))."
+            }
+            Write-Host 'PASS: recovered an interrupted journal generated by exact released v0.2.0 source.'
+            $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
+            $oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
+            $oldUninstallerHash = (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash
+            Invoke-ScriptFixture 'shortcut-after-stage'
+            if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
+                (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
+                (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarkerHash -or
+                (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash -ne $oldUninstallerHash -or
+                (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
+                (Get-OwnedTask $context).State -ne 'Running' -or
+                (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+                throw 'Interrupted shortcut migration did not restore exact released resources and both histories.'
+            }
+            Write-Host 'PASS: interrupted v0.2.0 shortcut migration restored prior executable, marker, task XML, registration, legacy shortcut and both complete histories.'
+        }
+        Invoke-FailedWizard 'after-activation' ''
+        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
+            (Get-OwnedTask $context).Principal.RunLevel -ne $level -or
+            (Get-StartupEnabled (Get-OwnedTask $context)) -ne $auto -or
+            (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
+            (Test-Path -LiteralPath $context.Shortcut) -or
+            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw 'v0.2.0 rollback changed prior startup, shortcut or profile.'
+        }
+        Write-Host "PASS: actual v0.2.0 rollback ($level, logon=$auto) restored exact prior resources and both complete histories."
+        # No /TASKS: preserve actual task state rather than Inno's former checkbox history.
+        Invoke-Wizard $setupFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$log"""
+        if ((Get-OwnedTask $context).Principal.RunLevel -ne $level -or
+            (Get-StartupEnabled (Get-OwnedTask $context)) -ne $auto -or
+            -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
+            (Test-Path -LiteralPath $context.LegacyShortcut) -or
+            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw 'v0.2.0 update changed startup, shortcut or profile.'
+        }
+        Assert-ForeignShortcut
+        $ready = Get-ReadyInstance $context ([DateTime]::MinValue)
+        $appPid = $ready.pid
+        $scheduler = New-Object -ComObject Schedule.Service
+        $scheduler.Connect()
+        $taskFolder = $scheduler.GetFolder('\')
+        $taskDacl = $taskFolder.GetTask($context.Task).GetSecurityDescriptor(4)
+        foreach ($setting in @('off','on','off')) {
+            $helperExit = Invoke-StartupSetting "$setting"
+            if ($helperExit -ne 0 -or
+                (Get-StartupEnabled (Get-OwnedTask $context)) -ne ($setting -eq 'on') -or
+                (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
+                throw "Runtime startup toggle failed ($setting, exit $helperExit) or did not preserve the running process."
+            }
+        }
+        $otherMode = if ($level -eq 'Highest') { 'normal' } else { 'administrator' }
+        $originalMode = if ($level -eq 'Highest') { 'administrator' } else { 'normal' }
+        foreach ($mode in @($otherMode,$originalMode)) {
+            $helperExit = Invoke-StartupSetting "$mode"
+            $expectedLevel = if ($mode -eq 'administrator') { 'Highest' } else { 'Limited' }
+            if ($helperExit -ne 0 -or
+                (Get-OwnedTask $context).Principal.RunLevel -ne $expectedLevel -or
+                (Get-StartupEnabled (Get-OwnedTask $context)) -or
+                (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
+                throw "Runtime privilege choice failed ($mode, exit $helperExit) or altered active process/startup preference."
+            }
+        }
+        if ($taskFolder.GetTask($context.Task).GetSecurityDescriptor(4) -ne $taskDacl) {
+            throw 'Runtime startup changes altered task access permissions.'
+        }
+        Stop-ClipPlus $context
+        $launched = [DateTime]::UtcNow
+        Start-Process -FilePath $context.Shortcut
+        $ready = $null
+        for ($i = 0; $i -lt 40 -and $null -eq $ready; $i++) {
+            Start-Sleep -Milliseconds 250
+            $ready = Get-ReadyInstance $context $launched
+        }
+        if ($null -eq $ready -or (Get-StartupEnabled (Get-OwnedTask $context))) {
+            throw 'Disabled automatic startup prevented manual Start Menu launch.'
+        }
+        if ((Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw 'Manual launch or startup toggle modified existing profile data.'
+        }
+        $helperExit = Invoke-StartupSetting "on"
+        if ($helperExit -ne 0 -or -not (Get-StartupEnabled (Get-OwnedTask $context))) {
+            throw "Could not re-enable logon startup (exit $helperExit)."
+        }
+        Stop-ClipPlus $context
+        Start-ClipPlusAndVerify $context
+        if (-not (Get-StartupEnabled (Get-OwnedTask $context)) -or
+            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw 'Re-enabled startup did not persist or restart changed history.'
+        }
+        # The old Inno uninstall log must not remove a reused common link.
+        $reused = $shell.CreateShortcut($context.LegacyShortcut)
+        $reused.TargetPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'notepad.exe'
+        $reused.Save()
+        $reusedHash = (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash
+        Remove-Wizard
+        $installed = $false
+        if ((Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $reusedHash -or
+            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw 'Uninstall modified the unrelated reused shortcut or profile data.'
+        }
+        Remove-Item -LiteralPath $context.LegacyShortcut -Force
+        Assert-NoInstallation
+        Assert-ForeignShortcut
+        Write-Host "PASS: actual v0.2.0 update ($level, logon=$auto), runtime toggling, manual launch and uninstall preserve both histories."
+        # These exact directories were absent at the initial guard and
+        # contain only the lifecycle runner's synthetic data.
+        foreach ($dir in @($context.Data,$context.NormalData)) {
+            Assert-NoReparsePoint $dir
+            Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+                Assert-NoReparsePoint $_.FullName
+                if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic profile fixture.' }
+            }
+            Remove-Item -LiteralPath $dir -Recurse -Force
+        }
+    }
+
+    # Upgrade the current published release with its existing user shortcut.
+    # Its installer is unmodified; an old helper failure is visible, not retried away.
+    & $testExe --isolated-desktop --empty-fixture-clipboard
+    if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }
+    Invoke-Wizard $stableFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
+    $installed = $true
+    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $stableExeHash -or
+        -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
+        (Test-Path -LiteralPath $context.LegacyShortcut)) {
+        throw 'Expected exact released v0.2.1 and its user shortcut.'
+    }
+    Stop-ClipPlus $context
+    & $testExe --isolated-desktop --seed-v020-profile --database $database --profile administrator
+    if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable protected profile.' }
+    & $testExe --isolated-desktop --seed-v020-profile --database $normalDb --profile normal
+    if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable normal profile.' }
+    $adminBefore = Snapshot-Profile $database
+    $normalBefore = Snapshot-Profile $normalDb
+    $oldLinkHash = (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash
+    $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
+    $oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
+    $oldUninstallerHash = (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash
+    Start-ClipPlusAndVerify $context
+    Assert-UnchangedProfiles $adminBefore $normalBefore 'Released v0.2.1 startup'
+    Invoke-FailedWizard 'after-activation' ''
+    Assert-UnchangedProfiles $adminBefore $normalBefore 'Released v0.2.1 rollback'
+    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $stableExeHash -or
+        (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
+        (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
+        (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarkerHash -or
+        (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash -ne $oldUninstallerHash -or
+        (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+        throw 'v0.2.1 rollback did not preserve exact prior resources and both profiles.'
+    }
+    Install-Wizard
+    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $portableFile -Algorithm SHA256).Hash -or
+        -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
+        (Get-OwnedTask $context).Principal.RunLevel -ne 'Highest' -or
+        -not (Get-StartupEnabled (Get-OwnedTask $context)) -or
+        (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+        throw 'v0.2.1 update changed existing profiles, startup or shortcut.'
+    }
+    Remove-Wizard
+    $installed = $false
+    if ((Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+        throw 'v0.2.1 upgrade/uninstall did not preserve both profiles.'
+    }
+    Assert-NoInstallation
+    Assert-ForeignShortcut
+    foreach ($dir in @($context.Data,$context.NormalData)) {
+        Assert-NoReparsePoint $dir
+        Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+            Assert-NoReparsePoint $_.FullName
+            if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic stable profile fixture.' }
+        }
+        Remove-Item -LiteralPath $dir -Recurse -Force
+    }
+    Write-Host 'PASS: exact published v0.2.1 rollback, update and uninstall preserve both complete profiles and owned resources.'
+
+
 } catch {
     foreach ($file in @($log, $uninstallLog, $faultLog, (Join-Path $context.Data 'diagnostics.log'), (Join-Path $context.NormalData 'diagnostics.log'))) {
         if (Test-Path -LiteralPath $file) { Get-Content -LiteralPath $file -Tail 80 | Write-Host }

@@ -177,25 +177,34 @@ internal static partial class InstalledFlow
                    c.category_id,k.name,k.position
             FROM clips c JOIN formats f ON f.clip_id=c.id
             LEFT JOIN categories k ON k.id=c.category_id
-            WHERE c.title='Synthetic E2E title'
+            WHERE c.pinned=1
             ORDER BY c.id,f.format
             """;
         using var reader = command.ExecuteReader();
         var snapshot = new System.Text.StringBuilder();
-        var count = 0;
+        var seen = new Dictionary<string, long>(StringComparer.Ordinal);
         while (reader.Read())
         {
-            if (reader.GetInt32(3) != (int)ClipColor.Green || !reader.GetBoolean(4) ||
-                !reader.GetString(5).StartsWith("ClipPlus E2E ", StringComparison.Ordinal) ||
-                reader.IsDBNull(10) || reader.GetString(11) != "Synthetic work")
+            var title = reader.GetString(2);
+            var original = title == "Synthetic E2E title" &&
+                reader.GetInt32(3) == (int)ClipColor.Green &&
+                reader.GetString(5).StartsWith("ClipPlus E2E ", StringComparison.Ordinal) &&
+                !reader.IsDBNull(10) && reader.GetString(11) == "Synthetic work";
+            var secondary = title == "Secondary pinned title" &&
+                reader.GetInt32(3) == (int)ClipColor.Default &&
+                reader.GetString(5).StartsWith("Synthetic E2E title in original second payload ", StringComparison.Ordinal) &&
+                reader.IsDBNull(10);
+            if ((!original && !secondary) || !reader.GetBoolean(4) ||
+                (seen.TryGetValue(title, out var existing) && existing != reader.GetInt64(0)))
                 throw new InvalidOperationException("Pinned synthetic fixture metadata changed.");
-            count++;
+            seen[title] = reader.GetInt64(0);
             for (var i = 0; i < 9; i++)
                 snapshot.Append(Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture)).Append('|');
             snapshot.Append(Convert.ToBase64String((byte[])reader.GetValue(9))).Append('|');
-            snapshot.Append(reader.GetInt64(10)).Append('|').Append(reader.GetString(11)).Append('|').AppendLine(reader.GetInt64(12).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (reader.IsDBNull(10)) snapshot.AppendLine("no-category");
+            else snapshot.Append(reader.GetInt64(10)).Append('|').Append(reader.GetString(11)).Append('|').AppendLine(reader.GetInt64(12).ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
-        if (count == 0) throw new InvalidOperationException("Synthetic pinned clip and payload are missing.");
+        if (seen.Count != 2) throw new InvalidOperationException("Both synthetic pinned clips and payloads must be preserved.");
         snapshot.AppendLine(File.ReadAllText(settings));
         using var sha = System.Security.Cryptography.SHA256.Create();
         Console.WriteLine(BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(snapshot.ToString()))).Replace("-", ""));
