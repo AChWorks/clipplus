@@ -35,6 +35,7 @@ internal static partial class Program
         if (args.Contains("--exercise-migrated-history")) return LegacyHistoryFixture.Exercise(args);
         if (args.Contains("--snapshot-state"))
             return InstalledFlow.SnapshotState(args);
+        if (args.Contains("--quick-target")) return InstalledFlow.RunQuickTarget(args);
         if (args.Contains("--installed-flow"))
             return InstalledFlow.Run(args);
 

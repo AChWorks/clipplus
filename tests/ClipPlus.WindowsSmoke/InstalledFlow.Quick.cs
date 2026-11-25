@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -95,6 +97,13 @@ internal static partial class InstalledFlow
         if (QuickFind(popup, "Edit title: " + title) is not null || QuickFind(popup, "Clear recent items") is not null)
             throw new InvalidOperationException("Management controls leaked into quick mode.");
 
+        var unrelated = "Unpinned while quick panel is open " + Guid.NewGuid().ToString("N");
+        clipboard.Restore(ClipPayload.FromText(unrelated));
+        Wait(() => FindMetadata(database, unrelated)?.Pinned == false, "quick mode still captures unrelated recent items");
+        if (QuickFind(popup, "Paste: No Title") is not null ||
+            QuickFind(popup, "Paste: " + title) is null || QuickFind(popup, "Paste: " + secondaryTitle) is null)
+            throw new InvalidOperationException("Unrelated capture changed the pinned-only quick list.");
+
         // Hotkey cannot dismiss the persistent panel or steal the target.
         SendShortcut(shortcut);
         Wait(() => Native.GetForegroundWindow() == hwnd && QuickFind(popup, "Paste: " + title) is not null,
@@ -121,36 +130,48 @@ internal static partial class InstalledFlow
         if (editor.Text != secondary || Native.GetForegroundWindow() != hwnd)
             throw new InvalidOperationException("Quick search reset stole focus or duplicated paste.");
 
-        // Create a second real foreground HWND. Position it on the other
-        // side of the available desktop so an actual outside click is possible.
+        // A second independently running editor process exercises both HWND
+        // and process identity changes, rather than a second window in this process.
         var area = SystemParameters.WorkArea;
         var panelCenter = (quickBounds.Left + quickBounds.Right) / (2 * Scale(popup));
-        var otherEditor = new TextBox { AcceptsReturn = true, FontSize = 18, Margin = new Thickness(8) };
-        var other = new Window
+        var width = (int)Math.Min(360, area.Width / 2);
+        var left = (int)(panelCenter > area.Left + area.Width / 2 ? area.Left + 8 : area.Right - width - 8);
+        var topPosition = (int)area.Top + 30;
+        var ownExe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        using var other = Process.Start(new ProcessStartInfo(ownExe,
+            FormattableString.Invariant($"--isolated-desktop --quick-target --left {left} --top {topPosition} --width {width}"))
+        { UseShellExecute = false }) ?? throw new InvalidOperationException("Could not launch second editor process.");
+        nint otherHwnd = 0;
+        AutomationElement OtherEditor() => QuickRequire(otherHwnd, "Second synthetic editor");
+        string OtherText()
         {
-            Title = "ClipPlus second synthetic paste target", Content = otherEditor,
-            Width = Math.Min(360, area.Width / 2), Height = 180,
-            WindowStartupLocation = WindowStartupLocation.Manual,
-            Left = panelCenter > area.Left + area.Width / 2 ? area.Left + 8 : area.Right - Math.Min(360, area.Width / 2) - 8,
-            Top = area.Top + 30
-        };
-        other.Show();
-        var otherHwnd = new WindowInteropHelper(other).Handle;
+            var element = QuickFind(otherHwnd, "Second synthetic editor");
+            return element is null ? "<unavailable>" : ((ValuePattern)element.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
+        }
+        void FocusOther()
+        {
+            PointerClick(OtherEditor());
+            Wait(() => Native.GetForegroundWindow() == otherHwnd &&
+                AutomationElement.FocusedElement?.Current.Name == "Second synthetic editor", "second editor process focused");
+        }
         try
         {
-            QuickFocus(other, otherEditor);
-            var outside = otherEditor.PointToScreen(new Point(otherEditor.ActualWidth / 2, otherEditor.ActualHeight / 2));
-            if (!Native.SetCursorPos((int)outside.X, (int)outside.Y)) throw Native.Error("Move outside quick panel");
-            SendMouse(0x0002);
-            Pump(TimeSpan.FromMilliseconds(80));
-            SendMouse(0x0004);
-            Wait(() => Native.GetForegroundWindow() == otherHwnd && QuickFind(popup, "Paste: " + title) is not null,
+            Wait(() =>
+            {
+                other.Refresh();
+                if (other.HasExited) throw new InvalidOperationException("Second editor process exited prematurely.");
+                otherHwnd = other.MainWindowHandle;
+                return otherHwnd != 0 && Native.GetWindowThreadProcessId(otherHwnd, out var pid) != 0 &&
+                    pid == (uint)other.Id;
+            }, "independent second editor process opened");
+            FocusOther();
+            Wait(() => QuickFind(popup, "Paste: " + title) is not null,
                 "outside click leaves quick panel visible");
             PointerClick(QuickRequire(popup, "Paste: " + title));
-            Wait(() => Native.GetForegroundWindow() == otherHwnd && otherEditor.Text == original,
-                "title click pastes into newly active application without stealing focus");
+            Wait(() => Native.GetForegroundWindow() == otherHwnd && OtherText() == original,
+                "title click pastes into newly active process without stealing focus");
             PointerClick(QuickRequire(popup, "Paste: " + title));
-            Wait(() => otherEditor.Text == original + original && Native.GetForegroundWindow() == otherHwnd,
+            Wait(() => OtherText() == original + original && Native.GetForegroundWindow() == otherHwnd,
                 "repeated quick paste sends original payload exactly once per click");
 
             // Retain a filtered query on cancellation. Hold the actual
@@ -159,10 +180,10 @@ internal static partial class InstalledFlow
             PointerClick(QuickRequire(popup, "Search pinned clips"));
             Wait(() => Native.GetForegroundWindow() == popup, "quick search reactivated");
             SetValue(QuickRequire(popup, "Search pinned clips"), "secondary");
-            QuickFocus(other, otherEditor);
-            var priorOther = otherEditor.Text;
+            FocusOther();
+            var priorOther = OtherText();
             var priorFirst = editor.Text;
-            if (!Native.OpenClipboard(otherHwnd)) throw Native.Error("Hold clipboard for quick cancellation");
+            if (!Native.OpenClipboard(hwnd)) throw Native.Error("Hold clipboard for quick cancellation");
             try
             {
                 PointerClick(QuickRequire(popup, "Paste: " + secondaryTitle));
@@ -170,7 +191,7 @@ internal static partial class InstalledFlow
             }
             finally { Native.CloseClipboard(); }
             Pump(TimeSpan.FromMilliseconds(450));
-            if (editor.Text != priorFirst || otherEditor.Text != priorOther || QuickQuery(popup) != "secondary" ||
+            if (editor.Text != priorFirst || OtherText() != priorOther || QuickQuery(popup) != "secondary" ||
                 Native.GetForegroundWindow() != hwnd)
                 throw new InvalidOperationException("Quick cancellation pasted into a changed target or discarded the query.");
             Console.WriteLine("PASS: clipboard contention and foreground change cancel quick paste and retain search");
@@ -212,7 +233,32 @@ internal static partial class InstalledFlow
             SendKeys(KeyInput(0x1B), KeyInput(0x1B, true));
             Wait(() => Native.GetForegroundWindow() != popup, "ordinary dismissal restored after quick mode");
         }
-        finally { other.Close(); }
+        finally
+        {
+            if (!other.HasExited)
+            {
+                other.CloseMainWindow();
+                if (!other.WaitForExit(3000)) { other.Kill(); other.WaitForExit(); }
+            }
+        }
+    }
+
+    internal static int RunQuickTarget(string[] args)
+    {
+        var application = new Application();
+        var editor = new TextBox { AcceptsReturn = true, FontSize = 18, Margin = new Thickness(8) };
+        AutomationProperties.SetName(editor, "Second synthetic editor");
+        var window = new Window
+        {
+            Title = "ClipPlus independent synthetic paste target",
+            Content = editor,
+            Width = int.Parse(Argument(args, "--width"), CultureInfo.InvariantCulture), Height = 180,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = int.Parse(Argument(args, "--left"), CultureInfo.InvariantCulture),
+            Top = int.Parse(Argument(args, "--top"), CultureInfo.InvariantCulture)
+        };
+        window.Loaded += (_, _) => editor.Focus();
+        return application.Run(window);
     }
 
     private static void VerifyQuickGeometry(nint hwnd, QuickGeometry saved)

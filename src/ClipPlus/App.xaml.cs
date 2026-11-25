@@ -318,7 +318,10 @@ public partial class App : Application
             var (payload, sequence) = _clipboard.Capture();
             if (payload is not null) _store.Capture(payload);
             _capturedSequence = sequence;
-            if (payload is not null) _popup?.HistoryChanged();
+            // Capture only inserts/touches unpinned items; recopying an existing
+            // pin leaves its metadata and order unchanged. A persistent quick
+            // panel therefore needs no list scan for unrelated captures.
+            if (payload is not null && _popup is { IsQuickMode: false } popup) popup.HistoryChanged();
             if (_clipboard.Sequence != sequence) QueueCapture();
         }
         catch (Win32Exception ex) when (WindowsClipboard.IsBusy(ex) && ++_captureAttempts <= 8)
