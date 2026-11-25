@@ -46,9 +46,12 @@ internal static partial class Program
                 store.SetCategory(id, i % 2 == 0 ? category : second);
                 if (i < 5) store.SetPinned(id, true);
             }
-            new Preferences { WindowHeight = name == "normal" ? 410 : 470,
+            // Use the actual pre-v0.2.2 settings shape, without the new quick geometry.
+            var legacySettings = new { WindowHeight = name == "normal" ? 410 : 470,
                 WindowPosition = new WindowPosition(25, 40), CompactView = name == "normal",
-                ActiveView = category, Shortcut = Shortcut.CtrlShiftV }.Save(settings);
+                ActiveView = category, Shortcut = "CtrlShiftV" };
+            File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(legacySettings,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             return 0;
         }
         SqlitePlatform.Initialize();

@@ -30,7 +30,6 @@ public partial class App : Application
     private uint? _capturedSequence;
     private int _captureAttempts;
     private bool _captureQueued, _pasting, _exiting, _ready;
-    private nint _target;
     private string _data = "";
     private Preferences _preferences = new();
 
@@ -69,7 +68,8 @@ public partial class App : Application
             _messages.AddHook(WindowMessage);
             _clipboard = new WindowsClipboard(_messages.Handle);
             _shortcut = new ShortcutManager(_messages.Handle);
-            _popup = new PopupWindow(_store, PasteAsync, SaveGeometry, Report, () => _preferences, SaveView);
+            _popup = new PopupWindow(_store, PasteNormalAsync, SaveGeometry, Report, () => _preferences, SaveView,
+                PasteQuickAsync, SaveQuickGeometry);
             _popup.Closed += (_, _) => { if (!_exiting) Shutdown(); };
             MainWindow = _popup;
             CreateTray();
@@ -333,6 +333,8 @@ public partial class App : Application
         if (_popup is null || _pasting || _exiting) return;
         try
         {
+            // A persistent quick panel is never toggled away by Win+V.
+            if (_popup.IsVisible && _popup.IsQuickMode) return;
             if (_popup.IsVisible && _popup.IsActive)
             {
                 if (fromShortcut) _popup.HidePopup();
@@ -340,75 +342,96 @@ public partial class App : Application
                 return;
             }
             var foreground = Native.GetForegroundWindow();
-            _target = foreground != 0 && Native.GetWindowThreadProcessId(foreground, out var pid) != 0 &&
-                pid != (uint)ProcessId && fromShortcut ? foreground : 0;
-            _popup.ShowAt(Native.Anchor(foreground));
+            _popup.ShowAt(Native.Anchor(foreground), fromShortcut ? Native.ExternalTarget(foreground) : null);
         }
         catch (Exception ex) { Report("Could not open the clipboard popup.", ex); }
     }
 
-    private async Task PasteAsync(long id)
+    private async Task PasteNormalAsync(long id) =>
+        await PasteAsync(id, _popup?.NormalTarget, false);
+
+    private Task<bool> PasteQuickAsync(long id, Native.PasteTarget? target) =>
+        PasteAsync(id, target, true);
+
+    // True means the intended target was validated and SendInput completed,
+    // not that an arbitrary external application acknowledged the paste.
+    private async Task<bool> PasteAsync(long id, Native.PasteTarget? target, bool quick)
     {
-        if (_pasting || _store is null || _clipboard is null || _popup is null) return;
+        if (_pasting || _store is null || _clipboard is null || _popup is null) return false;
         _pasting = true;
-        var target = _target;
         try
         {
             var payload = _store.Read(id);
-            if (payload is null) { Report("This item is no longer available."); return; }
+            if (payload is null) { Report("This item is no longer available."); return false; }
             var ownWindow = _popup.Handle;
-            if (target != 0 && Native.IsWindow(target) && Native.GetForegroundWindow() == ownWindow)
-                Native.SetForegroundWindow(target);
-            _popup.HidePopup();
+            var foreground = Native.GetForegroundWindow();
+            if (target is not null)
+            {
+                if (!target.IsValid || (foreground != target.Handle && foreground != ownWindow))
+                {
+                    if (!quick) _popup.HidePopup();
+                    Report("Paste canceled because the active application changed.");
+                    return false;
+                }
+                if (foreground == ownWindow) Native.SetForegroundWindow(target.Handle);
+            }
+            if (!quick) _popup.HidePopup();
 
-            // A tray-opened popup has no reliable previous text target.
-            // In that case copy only and let the user choose where to paste.
-            if (target != 0)
+            // With no known external target, copy only; never inject into ClipPlus.
+            if (target is not null)
             {
                 for (var attempt = 0; attempt < 30 &&
-                    (Native.ModifiersDown || Native.Down(0x0D) || Native.GetForegroundWindow() != target); attempt++)
+                    (Native.ModifiersDown || Native.Down(0x0D) || !target.IsForeground); attempt++)
                 {
-                    var foreground = Native.GetForegroundWindow();
-                    if (foreground != 0 && foreground != target && foreground != ownWindow)
+                    foreground = Native.GetForegroundWindow();
+                    if (!target.IsValid || (foreground != 0 && foreground != target.Handle && foreground != ownWindow))
                         break;
                     await Task.Delay(20);
                 }
-                if (!Native.IsWindow(target) || Native.GetForegroundWindow() != target ||
-                    Native.ModifiersDown || Native.Down(0x0D))
+                if (!target.IsForeground || Native.ModifiersDown || Native.Down(0x0D))
                 {
                     Report("The previous application could not be focused. The clipboard was not changed.");
-                    return;
+                    return false;
                 }
             }
 
             for (var attempt = 0; ; attempt++)
             {
+                if (target is not null && !target.IsForeground)
+                {
+                    Report("Paste canceled because the active application changed.");
+                    return false;
+                }
                 try { _clipboard.Restore(payload); break; }
                 catch (Win32Exception ex) when (WindowsClipboard.IsBusy(ex) && attempt < 5)
                 {
                     await Task.Delay(40);
-                    if (target != 0 && Native.GetForegroundWindow() != target)
-                    {
-                        Report("Paste canceled because the active application changed.");
-                        return;
-                    }
                 }
             }
-            if (target == 0)
+            if (target is null)
             {
                 Report("Copied to the clipboard. Paste in the application you choose.");
-                return;
+                return false;
             }
-            if (Native.GetForegroundWindow() != target || Native.ModifiersDown)
+            if (!target.IsForeground || Native.ModifiersDown || Native.Down(0x0D))
             {
                 Report("Clipboard restored, but the active application changed. Paste manually.");
-                return;
+                return false;
             }
             Native.PasteKeys();
+            return true;
         }
         catch (ClipboardRestoreException ex) { Report(ex.Message + " No paste was sent.", ex); }
         catch (Exception ex) { Report("Could not complete paste. Check the target application and clipboard.", ex); }
         finally { _pasting = false; }
+        return false;
+    }
+
+    private void SaveQuickGeometry(QuickGeometry geometry)
+    {
+        if (_preferences.QuickPanel == geometry) return;
+        _preferences = _preferences with { QuickPanel = geometry };
+        SavePreferences();
     }
 
     private void SaveGeometry(double? height, WindowPosition? position)

@@ -12,7 +12,7 @@ using ClipPlus;
 using ClipPlus.Core;
 using Microsoft.Data.Sqlite;
 
-internal static class InstalledFlow
+internal static partial class InstalledFlow
 {
     internal static int Run(string[] args)
     {
@@ -67,6 +67,7 @@ internal static class InstalledFlow
             if (verifySavedGeometry)
             {
                 VerifyGeometry(popupHwnd, Preferences.Load(settings));
+                VerifyQuickRestart(popupHwnd, hwnd, settings);
                 SendKeys(KeyInput(0x1B), KeyInput(0x1B, true));
                 Console.WriteLine("PASS: restarted application restored saved position and height");
                 return 0;
@@ -147,6 +148,7 @@ internal static class InstalledFlow
             Wait(() => Native.GetForegroundWindow() == hwnd && editor.Text == text, "compact paste action restored original target and payload");
             Pump(TimeSpan.FromMilliseconds(300));
             if (editor.Text != text) throw new InvalidOperationException("Compact paste was duplicated or altered.");
+            VerifyQuickPanel(popupHwnd, target, editor, database, settings, text, shortcut);
             using var identity = WindowsIdentity.GetCurrent();
             var elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
             Console.WriteLine($"PASS: installed end-to-end clipboard workflow ({shortcut}); target elevated={elevated}.");

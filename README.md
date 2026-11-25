@@ -1,6 +1,6 @@
 # ClipPlus
 
-A lightweight Windows clipboard history manager that keeps the familiar Win+V workflow and adds search, editable titles, pins, colors, categories, compact view and persistent popup geometry.
+A lightweight Windows clipboard history manager that keeps the familiar Win+V workflow and adds search, editable titles, pins, colors, categories, compact view, a pinned quick-paste panel and persistent popup geometry.
 
 [Download installer](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus-Setup.exe) · [Download portable](https://github.com/AChWorks/clipplus/releases/latest/download/ClipPlus.exe) · [Releases and checksums](https://github.com/AChWorks/clipplus/releases/latest)
 
@@ -30,11 +30,14 @@ Publisher metadata identifies AChWorks. The initial release is unsigned, so Wind
 | Categories | Select Pinned, Recent or a custom category; + adds a category (up to ten), double-click or F2 edits it, drag or Ctrl+Left/Right reorders it |
 | Assign a category | Use + or the category name on the clip; select No category to detach it |
 | Compact view | Use the centered footer toggle to collapse titled clips; untitled clips retain their previews |
+| Pinned quick-paste (v0.2.2) | Use the pin icon beside Close to enter or leave the persistent title-only panel |
 | Clear history | Clear removes all unpinned items (including categorized items) and keeps pins |
 | Move or resize | Drag the header or top/bottom edge; position and height persist |
 | Restore contextual position | Tray > Reset popup position |
 
 ClipPlus keeps 100 recent unpinned clips plus all pinned clips, deduplicates equivalent copies without losing their metadata, and retains Unicode text, HTML and relevant native image formats. Pinned is the complete global view, all pins first and then all unpinned recent items; Recent shows only global unpinned items. Custom categories contain their own pins first and then their unpinned clips. A clip can belong to one category. Deleting a category detaches its clips without deleting them. Categorization does not prevent normal history eviction: pin a clip to keep it. Category order, the selected view and compact mode persist. In compact mode, use the Paste clip button or Enter to paste a titled clip; clicking its title still edits it. The popup follows the system light/dark appearance, with a slim Windows-style scrollbar for overflowing history.
+
+In v0.2.2, the quick-paste panel lists only actual global pins, including untitled pins as No Title. Click a title to paste its original clipboard formats into the foreground application. The panel stays visible, including after outside clicks and successful pastes. Search matches pinned titles and content, ranks title matches first, and resets to all pins after a successful paste without moving focus back to ClipPlus. Click Search to type; use Up/Down and Enter if preferred. A canceled or copy-only operation retains the query. Drag the header and resize any edge; quick geometry is saved separately from ordinary popup geometry. The pin toggle returns to ordinary history; Close hides the panel. Win+V does not dismiss quick mode. No quick panel opens automatically at sign-in. Windows foreground and integrity restrictions still apply.
 
 Updating from v0.1.0 uses an additive, transactional history migration. An arbitrary downgrade is not a full reversal of the data model: v0.1.0 still enforces its 50-item recent limit during capture and pin/unpin and does not understand the new compact/selected-view settings. Do not downgrade a history with more than 50 recent clips without first preserving a separate copy of its database and settings.
 

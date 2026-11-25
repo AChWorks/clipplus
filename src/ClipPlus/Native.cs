@@ -119,6 +119,23 @@ internal static class Native
     internal static extern bool SetForegroundWindow(nint hwnd);
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+    // Revalidate the owning thread and process before refocusing or injecting.
+    internal sealed record PasteTarget(nint Handle, uint Thread, uint Process)
+    {
+        internal bool IsValid => IsWindow(Handle) &&
+            GetWindowThreadProcessId(Handle, out var process) == Thread && process == Process;
+        internal bool IsForeground => IsValid && GetForegroundWindow() == Handle;
+    }
+
+    internal static PasteTarget? ExternalTarget(nint hwnd)
+    {
+        if (hwnd == 0 || !IsWindow(hwnd)) return null;
+        var thread = GetWindowThreadProcessId(hwnd, out var process);
+        if (thread == 0 || process == 0) return null;
+        using var own = System.Diagnostics.Process.GetCurrentProcess();
+        return process == (uint)own.Id ? null : new PasteTarget(hwnd, thread, process);
+    }
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
