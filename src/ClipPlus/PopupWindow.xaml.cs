@@ -938,7 +938,13 @@ public partial class PopupWindow : Window
                 "AppsUseLightTheme", 1) is int value && value == 0;
         }
         catch (System.Security.SecurityException) { }
-        var highContrast = SystemParameters.HighContrast;
+        return ApplyTheme(dark, SystemParameters.HighContrast);
+    }
+
+    // Keep resource application independent of OS preference discovery so
+    // the real mapping can also be exercised on an isolated test window.
+    internal bool ApplyTheme(bool dark, bool highContrast)
+    {
         if (_themeApplied && _dark == dark && !_highContrast && !highContrast) return false;
         _themeApplied = true;
         _dark = dark;

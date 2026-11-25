@@ -82,7 +82,91 @@ internal static partial class Program
             Check(!popup.IsQuickMode && popup.ActualWidth == normalWidth && search.Text == "" &&
                 ((FrameworkElement)popup.FindName("NavigationHost")).IsVisible,
                 "quick toggle restores normal popup, normal query and navigation");
+
+            Click(toggle);
+            search.Text = "match";
+            popup.UpdateLayout();
+            VerifyQuickSelection(popup, list, search);
         }
         finally { popup.HidePopup(); popup.Close(); }
+    }
+
+    private static void VerifyQuickSelection(PopupWindow popup, ListBox list, TextBox search)
+    {
+        // Exercise the production high-contrast resource mapping on this
+        // window only. The runner's actual OS theme remains unchanged.
+        popup.ApplyTheme(false, true);
+        var point = search.PointToScreen(new Point(search.ActualWidth / 2, search.ActualHeight / 2));
+        Check(Native.SetCursorPos((int)point.X, (int)point.Y), "move pointer to quick search");
+        InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
+        InstalledFlow.SendMouse(0x0002);
+        try { InstalledFlow.Pump(TimeSpan.FromMilliseconds(60)); }
+        finally { InstalledFlow.SendMouse(0x0004); }
+        PumpUntil(() => popup.IsActive && search.IsKeyboardFocused);
+        Check(popup.IsActive && search.IsKeyboardFocused && list.Items.Count == 2 && list.SelectedIndex == 0,
+            "quick keyboard selection starts in active search with two results");
+
+        (ListBoxItem Row, Border Card, Border Outline) Visual(int index)
+        {
+            var row = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(index);
+            var card = (Border)row.Content;
+            var outline = ((Grid)card.Child).Children.OfType<Border>().Single(b => !b.IsHitTestVisible);
+            return (row, card, outline);
+        }
+        Color ColorOf(Brush brush) => ((SolidColorBrush)brush).Color;
+        var first = Visual(0);
+        var second = Visual(1);
+        var firstSize = first.Row.RenderSize;
+        var secondSize = second.Row.RenderSize;
+        var focus = ColorOf((Brush)popup.FindResource("FocusBrush"));
+        var background = ColorOf((Brush)popup.FindResource("CardBrush"));
+
+        void AssertSelection(int selected, string evidence)
+        {
+            popup.UpdateLayout();
+            var active = Visual(selected);
+            var inactive = Visual(1 - selected);
+            Check(list.SelectedIndex == selected && active.Row.IsSelected && !inactive.Row.IsSelected &&
+                ColorOf(active.Card.Background) == background && ColorOf(inactive.Card.Background) == background &&
+                ColorOf(active.Outline.BorderBrush) == focus && focus != background &&
+                active.Outline.BorderThickness == new Thickness(1) &&
+                ColorOf(inactive.Outline.BorderBrush).A == 0 &&
+                Visual(0).Row.RenderSize == firstSize && Visual(1).Row.RenderSize == secondSize &&
+                Descendants<TextBlock>(active.Card).All(t => ColorOf(t.Foreground) != background) &&
+                search.IsKeyboardFocused,
+                evidence);
+        }
+
+        AssertSelection(0, "high-contrast mapping distinguishes selected quick row without changing geometry");
+        SavePopupEvidence(popup, "quick-high-contrast-mapping-first");
+        InstalledFlow.SendKeys(InstalledFlow.KeyInput(0x28), InstalledFlow.KeyInput(0x28, true));
+        PumpUntil(() => list.SelectedIndex == 1);
+        AssertSelection(1, "real Down key moves visible high-contrast quick selection");
+        SavePopupEvidence(popup, "quick-high-contrast-mapping-second");
+        InstalledFlow.SendKeys(InstalledFlow.KeyInput(0x26), InstalledFlow.KeyInput(0x26, true));
+        PumpUntil(() => list.SelectedIndex == 0);
+        AssertSelection(0, "real Up key restores visible high-contrast quick selection");
+
+        // Deactivation must remove the indication, including in the equal
+        // background mapping. Passive light/dark rows remain borderless.
+        var target = new Window { Title = "Synthetic selection target", Width = 240, Height = 100, ShowInTaskbar = false };
+        try
+        {
+            target.Show();
+            target.Activate();
+            Native.SetForegroundWindow(new System.Windows.Interop.WindowInteropHelper(target).Handle);
+            PumpUntil(() => !popup.IsActive);
+            Check(!popup.IsActive && popup.IsVisible && Native.IsNoActivate(popup.Handle),
+                "quick panel returns to native passive mode after losing search focus");
+            foreach (var theme in new[] { (Dark: false, HighContrast: true), (Dark: false, HighContrast: false), (Dark: true, HighContrast: false) })
+            {
+                popup.ApplyTheme(theme.Dark, theme.HighContrast);
+                popup.UpdateLayout();
+                Check(Enumerable.Range(0, 2).All(i => ColorOf(Visual(i).Outline.BorderBrush).A == 0) &&
+                    Visual(0).Row.RenderSize == firstSize && Visual(1).Row.RenderSize == secondSize,
+                    $"passive quick rows remain borderless and stable (dark={theme.Dark}, highContrastMapping={theme.HighContrast})");
+            }
+        }
+        finally { target.Close(); }
     }
 }

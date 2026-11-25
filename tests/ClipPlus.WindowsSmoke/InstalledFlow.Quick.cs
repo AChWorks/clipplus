@@ -163,6 +163,41 @@ internal static partial class InstalledFlow
         if (editor.Text != secondary || Native.GetForegroundWindow() != hwnd || !Native.IsNoActivate(popup))
             throw new InvalidOperationException("Quick search reset stole focus, duplicated paste or did not restore passive activation.");
 
+        // Exercise the actual keyboard route separately from pointer paste.
+        // Both pins match this query, but the title match ranks first.
+        editor.Clear();
+        PointerClick(QuickRequire(popup, "Search pinned clips"));
+        Wait(() => Native.GetForegroundWindow() == popup && !Native.IsNoActivate(popup), "quick keyboard search activated");
+        SetValue(QuickRequire(popup, "Search pinned clips"), title);
+        bool SelectedTitle(string expected)
+        {
+            var list = QuickFind(popup, "Pinned quick-paste clips");
+            if (list is null || !list.TryGetCurrentPattern(SelectionPattern.Pattern, out var pattern)) return false;
+            var selection = ((SelectionPattern)pattern).Current.GetSelection();
+            return selection.Length == 1 && selection[0].Current.Name == expected;
+        }
+        Wait(() => QuickQuery(popup) == title && SelectedTitle(title), "quick keyboard search selects title match first");
+        SendKeys(KeyInput(0x28), KeyInput(0x28, true));
+        Wait(() => SelectedTitle(secondaryTitle), "actual Down selects content-matched pin");
+        SendKeys(KeyInput(0x26), KeyInput(0x26, true));
+        Wait(() => SelectedTitle(title), "actual Up selects title-matched pin");
+        SendKeys(KeyInput(0x0D), KeyInput(0x0D, true));
+        try
+        {
+            Wait(() => Native.GetForegroundWindow() == hwnd && editor.IsKeyboardFocused && editor.Text == original &&
+                QuickQuery(popup) == "" && QuickFind(popup, "Paste: " + title) is not null &&
+                QuickFind(popup, "Paste: " + secondaryTitle) is not null && Native.IsNoActivate(popup),
+                "quick Enter pastes selected original payload, clears search, restores all pins and external focus");
+            Pump(TimeSpan.FromMilliseconds(200));
+            if (editor.Text != original || Native.GetForegroundWindow() != hwnd)
+                throw new InvalidOperationException("Quick keyboard paste duplicated content or stole focus.");
+        }
+        catch
+        {
+            QuickPasteEvidence(popup, hwnd, editor, original, title, clipboard);
+            throw;
+        }
+
         // A second independently running editor process exercises both HWND
         // and process identity changes, rather than a second window in this process.
         var area = SystemParameters.WorkArea;

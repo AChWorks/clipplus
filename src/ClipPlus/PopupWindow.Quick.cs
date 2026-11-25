@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shell;
@@ -178,6 +179,17 @@ public partial class PopupWindow
         AutomationProperties.SetName(container, item.DisplayTitle);
         Grid.SetColumn(button, 1);
         grid.Children.Add(button);
+        // Draw the active selection above the row without changing its
+        // measure, pointer hit testing or passive borderless appearance.
+        var outline = new Border
+        {
+            CornerRadius = card.CornerRadius,
+            BorderThickness = new Thickness(1),
+            IsHitTestVisible = false
+        };
+        outline.SetBinding(Border.BorderBrushProperty, new Binding(nameof(Border.BorderBrush)) { Source = card });
+        Grid.SetColumnSpan(outline, 2);
+        grid.Children.Add(outline);
         card.Child = grid;
         container.Content = card;
 
