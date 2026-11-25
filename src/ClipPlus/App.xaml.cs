@@ -37,6 +37,11 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Length > 0 && e.Args[0] == "--startup-setting")
+        {
+            Shutdown(StartupTask.RunSetting(e.Args));
+            return;
+        }
         try
         {
             var sid = WindowsIdentity.GetCurrent().User!.Value;
@@ -110,6 +115,67 @@ public partial class App : Application
             _preferences = _preferences with { WindowPosition = null };
             SavePreferences();
         })));
+        var automatic = new Forms.ToolStripMenuItem("Start with Windows") { CheckOnClick = false };
+        var mode = new Forms.ToolStripMenuItem("Startup privileges");
+        var normal = new Forms.ToolStripMenuItem("Normal");
+        var administrator = new Forms.ToolStripMenuItem("Administrator");
+        mode.DropDownItems.AddRange(new Forms.ToolStripItem[] { normal, administrator });
+        var profile = new Forms.ToolStripMenuItem { Enabled = false };
+        menu.Items.Add(automatic);
+        menu.Items.Add(mode);
+        menu.Items.Add(profile);
+        StartupTask.State? startup = null;
+        bool changing = false;
+        void RefreshStartup()
+        {
+            try
+            {
+                startup = StartupTask.Read();
+                automatic.Checked = startup.Automatic;
+                normal.Checked = !startup.Administrator;
+                administrator.Checked = startup.Administrator;
+                automatic.Enabled = mode.Enabled = !changing;
+                profile.Text = StartupTask.ProfileMismatch(startup)
+                    ? "Startup uses a different history profile"
+                    : "Startup uses this history profile";
+            }
+            catch (Exception ex)
+            {
+                startup = null;
+                automatic.Checked = normal.Checked = administrator.Checked = false;
+                automatic.Enabled = mode.Enabled = false;
+                profile.Text = "Startup settings unavailable (installed copy required)";
+                if (ex is not InvalidOperationException) Log("Read startup task", ex);
+            }
+        }
+        async Task ChangeStartup(string setting, bool confirmProfile)
+        {
+            if (changing || startup == null) return;
+            if (confirmProfile && MessageBox.Show(
+                    "Normal and Administrator histories are separate. This changes future startup and Start Menu launches, not the currently running app. Neither history is moved or deleted. Continue?",
+                    "ClipPlus", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            changing = true;
+            try
+            {
+                await StartupTask.ChangeAsync(setting);
+                Report("Startup setting saved. The current ClipPlus instance remains running.");
+            }
+            catch (Exception ex) { Report("Could not change startup setting: " + ex.Message, ex); }
+            finally { changing = false; RefreshStartup(); }
+        }
+        menu.Opening += (_, _) => RefreshStartup();
+        automatic.Click += (_, _) => Dispatcher.BeginInvoke(new Action(async () =>
+        {
+            if (startup != null) await ChangeStartup(startup.Automatic ? "off" : "on", false);
+        }));
+        normal.Click += (_, _) => Dispatcher.BeginInvoke(new Action(async () =>
+        {
+            if (startup?.Administrator == true) await ChangeStartup("normal", true);
+        }));
+        administrator.Click += (_, _) => Dispatcher.BeginInvoke(new Action(async () =>
+        {
+            if (startup?.Administrator == false) await ChangeStartup("administrator", true);
+        }));
         menu.Items.Add(new Forms.ToolStripSeparator());
         var elevated = StateDirectory.Elevated;
         menu.Items.Add(new Forms.ToolStripMenuItem(elevated ? "Running as Administrator" : "Running normally") { Enabled = false });
@@ -137,6 +203,7 @@ public partial class App : Application
             if (args.Button == Forms.MouseButtons.Left) Dispatcher.BeginInvoke(() => OpenPopup(false));
         };
         UpdateShortcutMenu();
+        // Query on menu opening, not on the clipboard hot path.
     }
 
     private static string ShortcutName(Shortcut shortcut) => shortcut switch
@@ -167,8 +234,11 @@ public partial class App : Application
         try
         {
             _shortcut.Set(requested);
-            _preferences = _preferences with { Shortcut = requested };
-            SavePreferences();
+            if (_preferences.Shortcut != requested || !File.Exists(SettingsPath))
+            {
+                _preferences = _preferences with { Shortcut = requested };
+                SavePreferences();
+            }
             UpdateShortcutMenu();
         }
         catch (Exception ex)

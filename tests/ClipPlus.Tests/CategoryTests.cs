@@ -22,7 +22,7 @@ public sealed class CategoryTests
         store.SetCategory(other, personal);
         var unassigned = store.Capture(ClipPayload.FromText("uncategorized"));
         Assert.Equal(new[] { pin, recent }, store.List(view: work).Select(c => c.Id));
-        Assert.Equal(pin, Assert.Single(store.List(view: ClipStore.PinnedView)).Id);
+        Assert.Equal(new[] { pin, unassigned, other, recent }, store.List(view: ClipStore.PinnedView).Select(c => c.Id));
         Assert.Equal(new[] { unassigned, other, recent }, store.List(view: ClipStore.RecentView).Select(c => c.Id));
         Assert.Equal(new[] { other, pin, recent }, store.List("MATCH", work).Select(c => c.Id));
         Assert.Equal((true, true), store.AvailableViews());

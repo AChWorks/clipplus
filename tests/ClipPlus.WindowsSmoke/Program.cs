@@ -38,6 +38,9 @@ internal static partial class Program
         if (args.Contains("--installed-flow"))
             return InstalledFlow.Run(args);
 
+        if (args.Contains("--seed-v020-profile") || args.Contains("--snapshot-v020-profile")) return ProfileFixture(args);
+        if (args.Contains("--popup-benchmark")) return PopupBenchmark();
+
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         using var first = new HwndSource(new HwndSourceParameters("ClipPlus smoke sender") { WindowStyle = 0 });
         using var second = new HwndSource(new HwndSourceParameters("ClipPlus smoke receiver") { WindowStyle = 0 });
@@ -166,7 +169,7 @@ internal static partial class Program
             var contentMatch = store.Capture(ClipPayload.FromText("Search priority in content"));
             store.SetPinned(contentMatch, true);
             search.Text = "Search priority";
-            Check(list.Items.Count == 2 && ((System.Windows.Controls.ListBoxItem)list.Items[0]).Tag is long ranked && ranked == titleMatch,
+            Check(list.Items.Count == 2 && ((PopupWindow.HistoryEntry)list.Items[0]).Item.Id == titleMatch,
                 "WPF title match precedes pinned content match");
             search.Text = "No Title";
             Check(list.Items.Count == 0, "WPF untitled placeholder is not searchable");
@@ -208,6 +211,7 @@ internal static partial class Program
                   Math.Abs(indicator.ActualWidth - expectedIndicatorWidth) <= 0.5,
                 "Windows-style scrollbar has narrow indicator and 12-DIP interaction area");
             Check(viewer.ScrollableHeight > 0 && bar.Maximum > 0, "native scroll range remains usable");
+            Check(Descendants<ListBoxItem>(list).Count() < list.Items.Count, "overflowing history realizes only a subset of cards");
             viewer.ScrollToBottom();
             popup.UpdateLayout();
             Check(viewer.VerticalOffset > 0 && Math.Abs(bar.Value - viewer.VerticalOffset) < 1,

@@ -12,7 +12,7 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
@@ -27,12 +27,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop
           exit $LASTEXITCODE
+      - name: Measure released-source baseline and candidate WPF performance
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path TestResults -Force | Out-Null
+          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v020'
+          git fetch --no-tags origin refs/tags/v0.2.0:refs/tags/v0.2.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $baseline f6199139acfe26b30c04b931b5819e9da10ed986
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          try {
+            $source = Join-Path $baseline 'tests/ClipPlus.WindowsSmoke'
+            Copy-Item tests/ClipPlus.WindowsSmoke/Program.Benchmark.cs $source
+            $program = Join-Path $source 'Program.cs'
+            $content = Get-Content -LiteralPath $program -Raw
+            $anchor = '        var application = new Application'
+            if (-not $content.Contains($anchor)) { throw 'Released benchmark entry point missing.' }
+            $content.Replace($anchor, "        if (args.Contains(""--popup-benchmark"")) return PopupBenchmark();`n$anchor") | Set-Content -LiteralPath $program -Encoding utf8NoBOM
+            dotnet build (Join-Path $source 'ClipPlus.WindowsSmoke.csproj') -c Release
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v020.txt
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v021.txt
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if (-not (Select-String -Path TestResults/performance-v020.txt -Pattern 'BENCH first-open-recent') -or
+                -not (Select-String -Path TestResults/performance-v021.txt -Pattern 'BENCH first-open-recent')) {
+              throw 'Interactive WPF benchmark did not run.'
+            }
+          } finally { git worktree remove --force $baseline }
       - name: Upload synthetic popup visual evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ClipPlus-UI-Evidence
-          path: TestResults/categories-*.png
+          path: |
+            TestResults/categories-*.png
+            TestResults/performance-*.txt
           if-no-files-found: ignore
           retention-days: 14
       - name: Validate setup script syntax
@@ -47,7 +77,7 @@ jobs:
       - name: Build portable executable and graphical installer
         shell: pwsh
         run: ./scripts/Build-Package.ps1 -BuildFaultHarness
-      - name: Retrieve exact released v0.1.0 installer fixture
+      - name: Retrieve exact released v0.1.0 and v0.2.0 installer fixtures
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -55,11 +85,14 @@ jobs:
           $legacy = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.1.0'
           gh release download v0.1.0 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $legacy
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $previous = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.0'
+          gh release download v0.2.0 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $previous
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise portable and installer lifecycle on isolated Windows
         shell: pwsh
         run: |
           $legacy = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.1.0'
-          ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe -LegacySetup (Join-Path $legacy 'ClipPlus-Setup.exe')
+          ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe -LegacySetup (Join-Path $legacy 'ClipPlus-Setup.exe') -PreviousSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.0/ClipPlus-Setup.exe')
       - name: Upload verified candidate files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

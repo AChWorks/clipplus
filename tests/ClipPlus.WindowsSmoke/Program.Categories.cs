@@ -54,10 +54,10 @@ internal static partial class Program
         }
         ListBoxItem Row(long id)
         {
-            var row = list.Items.Cast<ListBoxItem>().Single(item => (long)item.Tag == id);
-            list.ScrollIntoView(row);
+            var item = list.Items.Cast<PopupWindow.HistoryEntry>().Single(entry => entry.Item.Id == id);
+            list.ScrollIntoView(item);
             popup.UpdateLayout();
-            return row;
+            return (ListBoxItem)list.ItemContainerGenerator.ContainerFromItem(item);
         }
         void Assign(long id, string choice)
         {
@@ -70,9 +70,9 @@ internal static partial class Program
         }
 
         search.Text = "";
-        Check(list.Items.Count == 2 && preferences().ActiveView == ClipStore.PinnedView, "initial Pinned view");
+        Check(list.Items.Count == 3 && preferences().ActiveView == ClipStore.PinnedView, "initial Pinned view");
         Click(recentTab);
-        Check(list.Items.Count == 1 && (long)((ListBoxItem)list.Items[0]).Tag == recent, "Recent excludes pins");
+        Check(list.Items.Count == 1 && ((PopupWindow.HistoryEntry)list.Items[0]).Item.Id == recent, "Recent excludes pins");
         NewCategory("Work");
         var work = store.Categories().Single().Id;
         Check(list.Items.Count == 0 && preferences().ActiveView == work, "new category selected");
@@ -80,18 +80,18 @@ internal static partial class Program
         Check(list.Items.Count == 1 && ((TextBlock)popup.FindName("SearchScope")).IsVisible, "search is global");
         Assign(pin, "Work");
         search.Text = "";
-        Check(list.Items.Count == 1 && (long)((ListBoxItem)list.Items[0]).Tag == pin, "clear search restores category");
+        Check(list.Items.Count == 1 && ((PopupWindow.HistoryEntry)list.Items[0]).Item.Id == pin, "clear search restores category");
         search.Text = "second synthetic item";
         Assign(recent, "Work");
         search.Text = "";
-        Check(list.Items.Cast<ListBoxItem>().Select(item => (long)item.Tag).SequenceEqual(new[] { pin, recent }),
+        Check(list.Items.Cast<PopupWindow.HistoryEntry>().Select(entry => entry.Item.Id).SequenceEqual(new[] { pin, recent }),
             "custom category lists pins first");
         NewCategory("Code");
         var code = store.Categories().Single(c => c.Name == "Code").Id;
         search.Text = "second synthetic item";
         Assign(recent, "Code");
         search.Text = "";
-        Check(list.Items.Count == 1 && (long)((ListBoxItem)list.Items[0]).Tag == recent, "changing category updates visible membership");
+        Check(list.Items.Count == 1 && ((PopupWindow.HistoryEntry)list.Items[0]).Item.Id == recent, "changing category updates visible membership");
         Assign(recent, "No category");
         Check(list.Items.Count == 0 && store.List().Single(c => c.Id == recent).CategoryId is null, "remove category assignment");
 
@@ -107,6 +107,7 @@ internal static partial class Program
             InstalledFlow.Pump(TimeSpan.FromMilliseconds(70));
         }
         NameEditor().Text = "Renamed";
+        SavePopupEvidence(popup, "categories-editor");
         Key(0x0D);
         Check(store.Categories().Any(c => c.Id == code && c.Name == "Renamed"), "rename retains category identity");
         var renamed = FindButton(tabs, "Renamed");
@@ -152,13 +153,22 @@ internal static partial class Program
         Check(store.Categories().Select(c => c.Id).SequenceEqual(new[] { work, code }), "keyboard category reorder");
 
         Click(pinned);
-        Check(list.Items.Count == 2, "Pinned remains global");
+        Check(list.Items.Count == 3, "Pinned includes all global recent clips");
         Click(FindButton(tabs, "Work"));
         Check(list.Items.Count == 1, "category contains assigned pin");
         var original = Row(pin);
         var expandedHeight = original.ActualHeight;
         Check(Descendants<Ellipse>(original).All(dot => dot.Stroke is null), "color swatch has no permanent border");
+        Check(((Button)popup.FindName("ClearButton")).Content.Equals("Clear"), "Clear label restored");
+        Check(add.Content is TextBlock glyph && glyph.FontFamily.Source == "Segoe MDL2 Assets",
+            "category add uses native glyph");
+        Check(pinned.BorderBrush is SolidColorBrush pinnedBrush && pinnedBrush.Color.A == 0 &&
+            recentTab.BorderBrush is SolidColorBrush recentBrush && recentBrush.Color.A == 0,
+            "system tabs have no permanent selection outline");
         SavePopupEvidence(popup, "categories-expanded");
+        Click(FindButton(original, "Change category: Work"));
+        SavePopupEvidence(popup, "categories-picker");
+        Click(FindButton(original, "Change category: Work"));
         Click(compact);
         var collapsed = Row(pin);
         Check(preferences().CompactView && collapsed.ActualHeight < expandedHeight - 10 &&
@@ -208,21 +218,21 @@ internal static partial class Program
             var clicks = 0;
             var priorPastes = pasteCount();
             button.Click += (_, _) => clicks++;
-            Check(!list.Items.Cast<ListBoxItem>().Any(item => (long)item.Tag == pending), $"{scenario}: capture is deferred");
+            Check(!list.Items.Cast<PopupWindow.HistoryEntry>().Any(entry => entry.Item.Id == pending), $"{scenario}: capture is deferred");
             Check(Native.SetCursorPos((int)point.X, (int)point.Y), $"{scenario}: pointer reaches history action");
             InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
             InstalledFlow.SendMouse(0x0002);
             try
             {
                 InstalledFlow.Pump(TimeSpan.FromMilliseconds(150));
-                Check(button.IsMouseCaptured && list.Items.Contains(row) && clicks == 0,
+                Check(button.IsMouseCaptured && list.ItemContainerGenerator.ItemFromContainer(row) is PopupWindow.HistoryEntry pressed && pressed.Item.Id == target && clicks == 0,
                     $"{scenario}: pressed history button survives focus departure and dispatcher processing");
             }
             finally { InstalledFlow.SendMouse(0x0004); }
             PumpUntil(() => store.List().Single(item => item.Id == target).Pinned &&
-                list.Items.Cast<ListBoxItem>().Any(item => (long)item.Tag == pending));
+                list.Items.Cast<PopupWindow.HistoryEntry>().Any(entry => entry.Item.Id == pending));
             Check(clicks == 1 && store.List().Single(item => item.Id == target).Pinned &&
-                list.Items.Cast<ListBoxItem>().Any(item => (long)item.Tag == pending) &&
+                list.Items.Cast<PopupWindow.HistoryEntry>().Any(entry => entry.Item.Id == pending) &&
                 pasteCount() == priorPastes && store.Categories().Any(c => c.Id == code && c.Name == "Renamed"),
                 $"{scenario}: action runs exactly once, captured history appears, no unintended paste or deletion");
             store.SetPinned(target, false);
@@ -263,11 +273,12 @@ internal static partial class Program
         PumpUntil(() => strip.HorizontalOffset > 0);
         Check(strip.HorizontalOffset > 0, "mouse wheel scrolls category strip horizontally");
         Check(add.IsVisible && recentTab.IsVisible && pinned.IsVisible, "fixed controls remain visible while categories scroll");
+        SavePopupEvidence(popup, "categories-overflow");
         VerifyOverflowDrag(popup, store, strip, tabs, pinned, recentTab, add);
         foreach (var category in store.Categories()) store.DeleteCategory(category.Id);
         popup.HistoryChanged();
         search.Text = "synthetic UI item";
-        var card = (Border)((StackPanel)Row(pin).Content).Children[1];
+        var card = Descendants<Border>(Row(pin)).First(b => b.Style == popup.FindResource("ClipCard"));
         var cardRight = card.TranslatePoint(new Point(card.ActualWidth, 0), popup).X;
         var searchRight = search.TranslatePoint(new Point(search.ActualWidth, 0), popup).X;
         Check(Math.Abs(cardRight - searchRight) <= 2, $"search/card right edges align (delta={cardRight - searchRight:0.0} DIP)");
