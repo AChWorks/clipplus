@@ -146,7 +146,7 @@ public partial class PopupWindow
         var button = new Button
         {
             Content = label, Focusable = false, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            Padding = new Thickness(6, 3), ToolTip = item.DisplayTitle
+            Padding = new Thickness(6, 3, 6, 3), ToolTip = item.DisplayTitle
         };
         AutomationProperties.SetName(button, "Paste: " + item.DisplayTitle);
         AutomationProperties.SetName(container, item.DisplayTitle);

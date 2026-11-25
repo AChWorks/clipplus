@@ -429,7 +429,7 @@ public partial class PopupWindow
                     Text = selected ? "✓ " + name : name, MaxWidth = 170,
                     TextTrimming = TextTrimming.CharacterEllipsis, FlowDirection = TextDirection(name)
                 },
-                Style = (Style)FindResource("CategoryChoice"), Padding = new Thickness(6, 3),
+                Style = (Style)FindResource("CategoryChoice"), Padding = new Thickness(6, 3, 6, 3),
                 ToolTip = name
             };
             SetTabState(button, selected);

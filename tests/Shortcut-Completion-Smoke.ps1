@@ -20,17 +20,18 @@ function Get-ScheduledTaskInfo {
     return @{ LastRunTime = $item.Time; LastTaskResult = $item.Result }
 }
 function Observation($State,$Time,$Result) { return @{ State=$State; Time=$Time; Result=$Result } }
-function Set-Observations($Values) { $script:observations = $Values; $script:index = 0 }
+function Set-Observations([object[]]$Values) { $script:observations = $Values; $script:index = 0 }
 
 Set-Observations @(
     (Observation 'Ready' $before 0x41303)
     (Observation 'Queued' $after 0)
     (Observation 'Ready' $after 0x41301)
     (Observation 'Ready' $after 0x41303)
+    (Observation 'Ready' $after 0x41325)
     (Observation 'Ready' $after 0)
 )
 $result = Wait-UserShortcutResult $context 'Create' $before
-if ($result -ne 0 -or $script:index -ne 5) {
+if ($result -ne 0 -or $script:index -ne 6) {
     throw 'Transient Scheduler status was accepted as a helper completion.'
 }
 foreach ($code in @(10,11)) {

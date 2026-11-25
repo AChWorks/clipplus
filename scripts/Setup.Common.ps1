@@ -439,10 +439,11 @@ function Wait-UserShortcutResult($Context, [string]$Action, [datetime]$Before) {
         $info = Get-ScheduledTaskInfo -TaskName $Context.ShortcutTask -TaskPath '\'
         $lastRun = $info.LastRunTime
         $result = $info.LastTaskResult
-        # 0x41301 = SCHED_S_TASK_RUNNING; 0x41303 = HAS_NOT_RUN.
+        # 0x41301 = SCHED_S_TASK_RUNNING; 0x41303 = HAS_NOT_RUN;
+        # 0x41325 = SCHED_S_TASK_QUEUED.
         # Neither is a helper exit code, even when State already reads Ready.
         if ($lastRun -eq $Before -or $state -in @('Running','Queued') -or
-            $result -in @(0x41301,0x41303)) { continue }
+            $result -in @(0x41301,0x41303,0x41325)) { continue }
         if ($result -in @(0,10,11)) { return [int]$result }
         throw "User shortcut operation failed ($Action, result $result)."
     }
