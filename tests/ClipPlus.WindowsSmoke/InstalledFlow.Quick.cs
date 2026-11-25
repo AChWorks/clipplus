@@ -34,6 +34,29 @@ internal static partial class InstalledFlow
         return search is not null ? ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).Current.Value : "<unavailable>";
     }
 
+    // Synthetic data only. Keep diagnostics discriminating without printing
+    // even fixture clipboard text or relying on a transient status message.
+    private static void QuickPasteEvidence(nint popup, nint target, TextBox editor,
+        string expected, string originalTitle, WindowsClipboard clipboard)
+    {
+        var foreground = Native.GetForegroundWindow();
+        var thread = Native.GetWindowThreadProcessId(target, out _);
+        var gui = new Native.GuiThreadInfo { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.GuiThreadInfo>() };
+        var guiRead = Native.GetGUIThreadInfo(thread, ref gui);
+        var status = AutomationElement.FromHandle(popup).FindFirst(TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.AutomationIdProperty, "StatusLabel"));
+        bool? clipboardMatches = null;
+        try { clipboardMatches = clipboard.Capture().Payload?.Text == expected; }
+        catch (System.ComponentModel.Win32Exception) { }
+        Console.WriteLine($"QUICK paste evidence: foreground={foreground}, target={target}, popup={popup}, " +
+            $"editorFocused={editor.IsKeyboardFocused}, editorLength={editor.Text.Length}, expectedLength={expected.Length}, " +
+            $"editorMatches={editor.Text == expected}, queryLength={QuickQuery(popup).Length}, " +
+            $"allPinsRestored={QuickFind(popup, "Paste: " + originalTitle) is not null}, " +
+            $"clipboardMatches={clipboardMatches}, owner={Native.GetClipboardOwner()}, " +
+            $"guiRead={guiRead}, active={gui.Active}, focus={gui.Focus}, " +
+            $"status={status?.Current.Name ?? "<none>"}");
+    }
+
     private static void PointerClick(AutomationElement element)
     {
         var rect = element.Current.BoundingRectangle;
@@ -123,9 +146,18 @@ internal static partial class InstalledFlow
             QuickFind(popup, "Paste: " + title) is null && QuickFind(popup, "Paste: " + secondaryTitle) is not null,
             "typed quick search narrows pins");
         PointerClick(QuickRequire(popup, "Paste: " + secondaryTitle));
-        Wait(() => Native.GetForegroundWindow() == hwnd && editor.Text == secondary &&
-            QuickQuery(popup) == "" && QuickFind(popup, "Paste: " + title) is not null,
-            "filtered paste restores all pins, stays visible, preserves target focus and exact original payload");
+        QuickPasteEvidence(popup, hwnd, editor, secondary, title, clipboard);
+        try
+        {
+            Wait(() => Native.GetForegroundWindow() == hwnd && editor.Text == secondary &&
+                QuickQuery(popup) == "" && QuickFind(popup, "Paste: " + title) is not null,
+                "filtered paste restores all pins, stays visible, preserves target focus and exact original payload");
+        }
+        catch
+        {
+            QuickPasteEvidence(popup, hwnd, editor, secondary, title, clipboard);
+            throw;
+        }
         Pump(TimeSpan.FromMilliseconds(200));
         if (editor.Text != secondary || Native.GetForegroundWindow() != hwnd)
             throw new InvalidOperationException("Quick search reset stole focus or duplicated paste.");

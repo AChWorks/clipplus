@@ -574,22 +574,6 @@ try {
     $portableProcess.WaitForExit()
     $portableProcess = $null
 
-    foreach ($shortcutFault in @('shortcut-after-stage','shortcut-partial-stage','shortcut-replaced-stage')) {
-        Invoke-ScriptFixture $shortcutFault
-        Assert-NoInstallation
-        Assert-ForeignShortcut
-    }
-    Invoke-ScriptFixture 'before-journal'
-    Assert-NoInstallation
-    Assert-ForeignShortcut
-    Invoke-FailedWizard 'after-activation'
-    Assert-NoInstallation
-    Invoke-FailedWizard 'cancel-install'
-    Assert-NoInstallation
-    Invoke-InterruptedRollback $false
-    Assert-NoInstallation
-    Assert-ForeignShortcut
-    Write-Host 'PASS: failed, canceled and interrupted initial rollback leave no app/task/registration.'
     $elevatedStarted = [DateTime]::UtcNow
     Install-Wizard
     $installed = $true
@@ -705,6 +689,29 @@ try {
     $installed = $false
     Clear-SyntheticProfiles
     Assert-ForeignShortcut
+    # Exercise initial transaction failures after the foreground interaction
+    # test, with a freshly empty disposable profile. All fault cases still run.
+    & $testExe --isolated-desktop --empty-fixture-clipboard
+    if ($LASTEXITCODE -ne 0) { throw 'Could not empty isolated clipboard before initial fault fixtures.' }
+    foreach ($shortcutFault in @('shortcut-after-stage','shortcut-partial-stage','shortcut-replaced-stage')) {
+        Invoke-ScriptFixture $shortcutFault
+        Assert-NoInstallation
+        Assert-ForeignShortcut
+    }
+    Invoke-ScriptFixture 'before-journal'
+    Assert-NoInstallation
+    Assert-ForeignShortcut
+    Invoke-FailedWizard 'after-activation'
+    Assert-NoInstallation
+    Invoke-FailedWizard 'cancel-install'
+    Assert-NoInstallation
+    Invoke-InterruptedRollback $false
+    Assert-NoInstallation
+    Assert-ForeignShortcut
+    Write-Host 'PASS: failed, canceled and interrupted initial rollback leave no app/task/registration.'
+    Clear-SyntheticProfiles
+    Assert-ForeignShortcut
+
     # Real released-version upgrade and rollback: verify both the old setup
     # and its installed executable by their immutable release checksums.
     # Use only the newly created synthetic fixture on this isolated runner.
