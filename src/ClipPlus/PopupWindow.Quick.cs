@@ -23,14 +23,26 @@ public partial class PopupWindow
     private void OnQuickSearchMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (!IsQuickMode || e.ChangedButton != MouseButton.Left) return;
-        var hwnd = Handle;
-        var foreground = Native.GetForegroundWindow();
-        if (foreground == hwnd) return;
-        _searchTarget = Native.ExternalTarget(foreground);
-        Activate();
-        if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
-        if (Native.GetForegroundWindow() == hwnd) FocusSearch();
-        else _searchTarget = null;
+        Run(() =>
+        {
+            var hwnd = Handle;
+            var foreground = Native.GetForegroundWindow();
+            if (foreground != hwnd) _searchTarget = Native.ExternalTarget(foreground);
+            // A passive quick window must not acquire WPF keyboard focus.
+            // Only explicit search interaction temporarily permits activation.
+            Native.SetNoActivate(hwnd, false);
+            if (foreground != hwnd)
+            {
+                Activate();
+                if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
+            }
+            if (Native.GetForegroundWindow() == hwnd) FocusSearch();
+            else
+            {
+                _searchTarget = null;
+                Native.SetNoActivate(hwnd, true);
+            }
+        });
     }
 
     private void SetQuickAppearance(bool quick)
@@ -53,6 +65,7 @@ public partial class PopupWindow
             WindowChrome.SetWindowChrome(this, chrome);
         }
         chrome.ResizeBorderThickness = quick ? new Thickness(6) : new Thickness(0, 6, 0, 6);
+        Native.SetNoActivate(Handle, quick);
     }
 
     private void ToggleQuickMode()

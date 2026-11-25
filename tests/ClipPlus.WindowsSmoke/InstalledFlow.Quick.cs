@@ -54,7 +54,7 @@ internal static partial class InstalledFlow
             $"allPinsRestored={QuickFind(popup, "Paste: " + originalTitle) is not null}, " +
             $"clipboardMatches={clipboardMatches}, owner={Native.GetClipboardOwner()}, " +
             $"guiRead={guiRead}, active={gui.Active}, focus={gui.Focus}, " +
-            $"status={status?.Current.Name ?? "<none>"}");
+            $"noActivate={Native.IsNoActivate(popup)}, status={status?.Current.Name ?? "<none>"}");
     }
 
     private static void PointerClick(AutomationElement element)
@@ -112,6 +112,7 @@ internal static partial class InstalledFlow
         PointerClick(QuickRequire(popup, "Open pinned quick-paste panel"));
         Wait(() => Native.GetForegroundWindow() == hwnd && QuickFind(popup, "Search pinned clips") is not null,
             "quick toggle restores the external foreground and keeps panel visible");
+        if (!Native.IsNoActivate(popup)) throw new InvalidOperationException("Quick panel lacks the passive native activation style.");
         var quickBounds = Bounds(popup);
         if (quickBounds.Right - quickBounds.Left >= 360 * Scale(popup))
             throw new InvalidOperationException("Initial quick panel was not narrower.");
@@ -132,7 +133,7 @@ internal static partial class InstalledFlow
         Wait(() => Native.GetForegroundWindow() == hwnd && QuickFind(popup, "Paste: " + title) is not null,
             "Win+V does not dismiss persistent panel");
         PointerClick(QuickRequire(popup, "Search pinned clips"));
-        Wait(() => Native.GetForegroundWindow() == popup, "explicit quick search activates panel");
+        Wait(() => Native.GetForegroundWindow() == popup && !Native.IsNoActivate(popup), "explicit quick search activates panel");
         SetValue(QuickRequire(popup, "Search pinned clips"), title);
         var top = QuickRequire(popup, "Paste: " + title).Current.BoundingRectangle.Top;
         var secondTop = QuickRequire(popup, "Paste: " + secondaryTitle).Current.BoundingRectangle.Top;
@@ -159,8 +160,8 @@ internal static partial class InstalledFlow
             throw;
         }
         Pump(TimeSpan.FromMilliseconds(200));
-        if (editor.Text != secondary || Native.GetForegroundWindow() != hwnd)
-            throw new InvalidOperationException("Quick search reset stole focus or duplicated paste.");
+        if (editor.Text != secondary || Native.GetForegroundWindow() != hwnd || !Native.IsNoActivate(popup))
+            throw new InvalidOperationException("Quick search reset stole focus, duplicated paste or did not restore passive activation.");
 
         // A second independently running editor process exercises both HWND
         // and process identity changes, rather than a second window in this process.
@@ -259,7 +260,7 @@ internal static partial class InstalledFlow
                 throw new InvalidOperationException("Quick panel changed ordinary geometry or did not persist position.");
             VerifyQuickGeometry(popup, saved.QuickPanel);
             PointerClick(QuickRequire(popup, "Return to clipboard history"));
-            Wait(() => Native.GetForegroundWindow() == popup && QuickFind(popup, "Search clipboard") is not null,
+            Wait(() => Native.GetForegroundWindow() == popup && !Native.IsNoActivate(popup) && QuickFind(popup, "Search clipboard") is not null,
                 "toggle returns to ordinary popup");
             VerifyGeometry(popup, saved);
             SendKeys(KeyInput(0x1B), KeyInput(0x1B, true));

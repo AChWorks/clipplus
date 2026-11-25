@@ -135,7 +135,12 @@ public partial class PopupWindow : Window
         Closed += (_, _) => InputManager.Current.PostProcessInput -= OnPostProcessInput;
         Deactivated += (_, _) =>
         {
-            if (IsQuickMode) { _searchTarget = null; return; }
+            if (IsQuickMode)
+            {
+                _searchTarget = null;
+                Run(() => Native.SetNoActivate(Handle, true));
+                return;
+            }
             if (!_placing && !_draggingCategory && IsVisible) HidePopup();
         };
         _paletteTimer.Tick += (_, _) =>
