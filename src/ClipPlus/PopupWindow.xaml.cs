@@ -36,7 +36,7 @@ public partial class PopupWindow : Window
     private Row? _openPalette;
     private Row? _editingRow;
     private TextBox? _titleEditor;
-    private bool _placing, _refreshing, _refreshPending, _dark;
+    private bool _placing, _refreshing, _refreshPending, _dark, _highContrast, _themeApplied;
     private bool _reconcileRequested, _reconcileQueued;
     private bool _inMoveSize, _userMoving, _userSizing;
     private Native.Rect _moveStart;
@@ -177,8 +177,8 @@ public partial class PopupWindow : Window
         _placing = true;
         try
         {
-            ApplyTheme();
-            foreach (var row in _rows.Values) SetColorVisual(row);
+            if (ApplyTheme())
+                foreach (var row in _rows.Values) SetColorVisual(row);
             _keyboardCursor = null;
             SearchBox.Text = "";
             ClosePalette(false);
@@ -857,7 +857,7 @@ public partial class PopupWindow : Window
         return brush;
     }
 
-    private void ApplyTheme()
+    private bool ApplyTheme()
     {
         var dark = false;
         try
@@ -866,9 +866,13 @@ public partial class PopupWindow : Window
                 "AppsUseLightTheme", 1) is int value && value == 0;
         }
         catch (System.Security.SecurityException) { }
+        var highContrast = SystemParameters.HighContrast;
+        if (_themeApplied && _dark == dark && !_highContrast && !highContrast) return false;
+        _themeApplied = true;
         _dark = dark;
+        _highContrast = highContrast;
         void Set(string name, string light, string night) => Resources[name] = BrushFrom(dark ? night : light);
-        if (SystemParameters.HighContrast)
+        if (highContrast)
         {
             Resources["PanelBrush"] = SystemColors.WindowBrush;
             Resources["FieldBrush"] = SystemColors.WindowBrush;
@@ -885,7 +889,7 @@ public partial class PopupWindow : Window
             Resources["ScrollRailBrush"] = SystemColors.ControlBrush;
             Resources["ScrollIndicatorWidth"] = 8.0;
             Resources["ScrollIndicatorActiveWidth"] = 8.0;
-            return;
+            return true;
         }
         Set("PanelBrush", "#F5F5F5", "#202020");
         Set("FieldBrush", "#FFFFFF", "#303030");
@@ -902,5 +906,6 @@ public partial class PopupWindow : Window
         Set("ScrollRailBrush", "#E1E1E1", "#393939");
         Resources["ScrollIndicatorWidth"] = 3.0;
         Resources["ScrollIndicatorActiveWidth"] = 6.0;
+        return true;
     }
 }

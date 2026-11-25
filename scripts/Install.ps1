@@ -168,13 +168,13 @@ function Restore-Registration($Context, $State) {
         $result = Invoke-UserShortcut $Context Remove (Join-Path $Context.Transaction 'UserShortcut.ps1')
         if ($result -notin @(0,11)) { throw 'Could not roll back the per-user shortcut.' }
     }
-    Assert-NoReparsePoint $Context.LegacyShortcut
+    $ownedLegacy = Test-OwnedLegacyShortcut $Context
     if ($State.hadShortcut) {
-        if ((Test-Path -LiteralPath $Context.LegacyShortcut) -and -not (Test-OwnedLegacyShortcut $Context)) {
+        if ((Test-Path -LiteralPath $Context.LegacyShortcut) -and -not $ownedLegacy) {
             throw 'Refusing to overwrite an unrelated legacy shortcut during rollback.'
         }
         Copy-Item -LiteralPath (Join-Path $Context.Transaction 'ClipPlus.lnk') -Destination $Context.LegacyShortcut -Force
-    } elseif ((Test-Path -LiteralPath $Context.LegacyShortcut) -and (Test-OwnedLegacyShortcut $Context)) {
+    } elseif ($ownedLegacy) {
         # Only old wizards created a common link during installation.
         if ($null -eq $State.PSObject.Properties['hadUserShortcut']) {
             Remove-Item -LiteralPath $Context.LegacyShortcut -Force

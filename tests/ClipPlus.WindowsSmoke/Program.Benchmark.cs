@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -17,7 +20,16 @@ internal static partial class Program
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         using var store = new ClipStore(":memory:");
         var categories = Enumerable.Range(0, 10).Select(i => store.CreateCategory($"Category {i} کار")).ToArray();
-        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOwbz3wHwAFDwKEY5hFdAAAAABJRU5ErkJggg==");
+        const int width = 640, height = 360;
+        var pixels = new byte[width * height * 4];
+        new Random(21).NextBytes(pixels);
+        for (var i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
+        var bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        var png = stream.ToArray();
         for (var i = 0; i < 400; i++)
         {
             var text = $"benchmark {i} " + string.Join(" ", Enumerable.Repeat("Long mixed-script clipboard text نمونه متن فارسی", 20));
@@ -51,13 +63,16 @@ internal static partial class Program
                 popup.UpdateLayout();
                 popup.Dispatcher.Invoke(DispatcherPriority.ApplicationIdle, new Action(() => { }));
                 clock.Stop();
+                if (!popup.IsVisible) throw new InvalidOperationException("Benchmark popup was hidden.");
                 Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
                     "BENCH {0} ms={1:F2} items={2} realized={3}", name, clock.Elapsed.TotalMilliseconds,
                     list.Items.Count, Descendants<ListBoxItem>(list).Count()));
             }
+            Console.WriteLine("BENCH image-bytes=" + png.Length);
             Console.WriteLine("BENCH version=" + typeof(PopupWindow).Assembly.GetName().Version +
                 " os=" + Environment.OSVersion.Version + " pins=300 recent=100 categories=10");
             Measure("first-open-recent", Open);
+            Console.WriteLine("BENCH dpi=" + VisualTreeHelper.GetDpi(popup).PixelsPerInchX);
             for (var i = 0; i < 5; i++)
             {
                 popup.HidePopup();

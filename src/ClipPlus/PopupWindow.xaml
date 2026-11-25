@@ -51,6 +51,7 @@
         </Style>
         <Style x:Key="CategoryChip" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <!-- Keep the border only as transient keyboard focus feedback. -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Margin" Value="0,0,3,0"/>
             <Setter Property="Padding" Value="6,2"/>
             <Setter Property="FontSize" Value="12"/>

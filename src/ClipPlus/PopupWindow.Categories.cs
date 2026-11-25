@@ -101,6 +101,8 @@ public partial class PopupWindow
 
     private static void SetTabState(Button tab, bool active)
     {
+        var status = active ? "Selected" : "";
+        if (AutomationProperties.GetItemStatus(tab) == status) return;
         if (active)
         {
             tab.SetResourceReference(BackgroundProperty, "CategorySelectedBrush");
@@ -112,7 +114,7 @@ public partial class PopupWindow
             tab.BorderBrush = System.Windows.Media.Brushes.Transparent;
             tab.FontWeight = FontWeights.Normal;
         }
-        AutomationProperties.SetItemStatus(tab, active ? "Selected" : "");
+        AutomationProperties.SetItemStatus(tab, status);
     }
 
     private void SelectView(long view)
@@ -300,7 +302,11 @@ public partial class PopupWindow
             Refresh(false);
             FocusSearch();
         });
-        editor.TextChanged += (_, _) => { if (confirming) SetDeleteConfirmation(false); };
+        editor.TextChanged += (_, _) =>
+        {
+            editor.FlowDirection = TextDirection(editor.Text);
+            if (confirming) SetDeleteConfirmation(false);
+        };
         _categoryEditHost = host;
         _categoryEditor = editor;
         if (id is long editing && _categoryButtons.TryGetValue(editing, out var original))

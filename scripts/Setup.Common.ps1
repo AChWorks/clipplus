@@ -96,19 +96,29 @@ function Assert-OwnedInstall($Context, [string]$Path) {
     }
 }
 
+function Find-RootTask([string]$Name) {
+    try { return Get-ScheduledTask -TaskName $Name -TaskPath '\' -ErrorAction Stop }
+    catch {
+        if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { return $null }
+        throw
+    }
+}
+
+function ConvertTo-AccountSid([string]$User) {
+    if ($User -match '^S-1-') { return $User }
+    return ([Security.Principal.NTAccount]::new($User)).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
 function Get-OwnedTask($Context) {
-    $task = Get-ScheduledTask -TaskName $Context.Task -TaskPath '\' -ErrorAction SilentlyContinue
+    $task = Find-RootTask $Context.Task
     if ($null -eq $task) { return $null }
     $actions = @($task.Actions)
-    if ($actions.Count -ne 1 -or $actions[0].Execute -ine $Context.Exe) {
+    if ($actions.Count -ne 1 -or $actions[0].Execute -ine $Context.Exe -or
+        $actions[0].Arguments -cne '--startup' -or $actions[0].WorkingDirectory -ine $Context.Install -or
+        $task.Principal.LogonType -ne 'Interactive') {
         throw "The existing scheduled task is not owned by this ClipPlus installation: $($Context.Task)"
     }
-    $taskUser = $task.Principal.UserId
-    if ($taskUser -match '^S-1-') {
-        $taskSid = $taskUser
-    } else {
-        $taskSid = ([Security.Principal.NTAccount]::new($taskUser)).Translate([Security.Principal.SecurityIdentifier]).Value
-    }
+    $taskSid = ConvertTo-AccountSid $task.Principal.UserId
     if ($taskSid -ne $Context.Sid) { throw 'The existing ClipPlus task belongs to a different user.' }
     return $task
 }
@@ -157,7 +167,9 @@ function Stop-ClipPlus($Context) {
 function Get-StartupEnabled($Task) {
     if ($null -eq $Task) { return $true }
     $triggers = @($Task.Triggers)
-    if ($triggers.Count -ne 1 -or $triggers[0].CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger') {
+    if ($triggers.Count -eq 0) { return $false }
+    if ($triggers.Count -ne 1 -or $triggers[0].CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger' -or
+        (ConvertTo-AccountSid $triggers[0].UserId) -ne (ConvertTo-AccountSid $Task.Principal.UserId)) {
         throw 'Unexpected ClipPlus logon trigger configuration.'
     }
     return [bool]($Task.Settings.Enabled -and $triggers[0].Enabled)
@@ -377,18 +389,15 @@ function Test-OwnedLegacyShortcut($Context) {
 }
 
 function Get-ShortcutHelperTask($Context) {
-    $task = Get-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\' -ErrorAction SilentlyContinue
+    $task = Find-RootTask $Context.ShortcutTask
     if ($null -eq $task) { return $null }
     $actions = @($task.Actions)
-    $user = $task.Principal.UserId
-    if ($user -notmatch '^S-1-') {
-        $user = ([Security.Principal.NTAccount]::new($user)).Translate([Security.Principal.SecurityIdentifier]).Value
-    }
+    $user = ConvertTo-AccountSid $task.Principal.UserId
     $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
     $allowed = @()
     foreach ($dir in @($Context.Transaction, $Context.RegistrationDir)) {
         foreach ($action in @('Inspect','Create','Remove')) {
-            $allowed += '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+            $allowed += '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' +
                 (Join-Path $dir 'UserShortcut.ps1') + '" -ExpectedSid "' + $Context.Sid + '" -Action ' + $action
         }
     }
@@ -415,7 +424,7 @@ function Invoke-UserShortcut($Context, [ValidateSet('Inspect','Create','Remove')
     if (-not (Test-Path -LiteralPath $Script -PathType Leaf)) { throw 'Protected shortcut helper is missing.' }
     Remove-ShortcutHelperTask $Context
     $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $Script +
+    $arguments = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $Script +
         '" -ExpectedSid "' + $Context.Sid + '" -Action ' + $Action
     $taskAction = New-ScheduledTaskAction -Execute $powershell -Argument $arguments
     $principal = New-ScheduledTaskPrincipal -UserId $Context.User -LogonType Interactive -RunLevel Limited

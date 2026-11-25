@@ -130,6 +130,14 @@ public partial class App : Application
         {
             try
             {
+                if (!StartupTask.IsInstalled)
+                {
+                    startup = null;
+                    automatic.Checked = normal.Checked = administrator.Checked = false;
+                    automatic.Enabled = mode.Enabled = false;
+                    profile.Text = "Install ClipPlus to manage startup";
+                    return;
+                }
                 startup = StartupTask.Read();
                 automatic.Checked = startup.Automatic;
                 normal.Checked = !startup.Administrator;
@@ -137,15 +145,17 @@ public partial class App : Application
                 automatic.Enabled = mode.Enabled = !changing;
                 profile.Text = StartupTask.ProfileMismatch(startup)
                     ? "Startup uses a different history profile"
-                    : "Startup uses this history profile";
+                    : !startup.Administrator && StateDirectory.Elevated && StateDirectory.ElevationType == 1
+                        ? "Normal startup uses this account's Administrator history"
+                        : "Startup uses this history profile";
             }
             catch (Exception ex)
             {
                 startup = null;
                 automatic.Checked = normal.Checked = administrator.Checked = false;
                 automatic.Enabled = mode.Enabled = false;
-                profile.Text = "Startup settings unavailable (installed copy required)";
-                if (ex is not InvalidOperationException) Log("Read startup task", ex);
+                profile.Text = "Startup unavailable - repair with ClipPlus Setup";
+                Log("Read startup task", ex);
             }
         }
         async Task ChangeStartup(string setting, bool confirmProfile)

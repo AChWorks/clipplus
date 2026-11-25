@@ -277,6 +277,14 @@ internal static partial class Program
         VerifyOverflowDrag(popup, store, strip, tabs, pinned, recentTab, add);
         foreach (var category in store.Categories()) store.DeleteCategory(category.Id);
         popup.HistoryChanged();
+        const string rtlName = "دسته بندی نمونه بسیار طولانی Persian English";
+        NewCategory(rtlName);
+        var rtl = FindButton(tabs, rtlName);
+        Check(rtl.Content is TextBlock rtlText && rtlText.FlowDirection == FlowDirection.RightToLeft &&
+            rtlText.TextTrimming == TextTrimming.CharacterEllipsis, "mixed-script category uses RTL and trims long text");
+        SavePopupEvidence(popup, "categories-rtl");
+        store.DeleteCategory(store.Categories().Single().Id);
+        popup.HistoryChanged();
         search.Text = "synthetic UI item";
         var card = Descendants<Border>(Row(pin)).First(b => b.Style == popup.FindResource("ClipCard"));
         var cardRight = card.TranslatePoint(new Point(card.ActualWidth, 0), popup).X;

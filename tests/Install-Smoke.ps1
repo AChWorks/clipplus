@@ -72,14 +72,16 @@ function Install-Wizard {
 }
 
 function Assert-NoInstallation {
-    if ((Test-Path -LiteralPath $context.Install) -or
-        (Test-Path -LiteralPath $context.LegacyShortcut) -or
-        $null -ne (Get-ShortcutHelperTask $context) -or
-        (Test-Path -LiteralPath $registration) -or
-        (Test-Path -LiteralPath $context.RegistrationDir) -or
-        (Test-Path -LiteralPath $context.Shortcut) -or
-        (Test-Path -LiteralPath $context.Transaction) -or
-        $null -ne (Get-OwnedTask $context)) { throw 'Failed setup left owned application/registration resources.' }
+    $remaining = @()
+    foreach ($name in @('Install','LegacyShortcut','RegistrationDir','Shortcut','Transaction')) {
+        if (Test-Path -LiteralPath $context.$name) { $remaining += $name }
+    }
+    if (Test-Path -LiteralPath $registration) { $remaining += 'Installed Apps key' }
+    if ($null -ne (Get-ShortcutHelperTask $context)) { $remaining += 'shortcut helper task' }
+    if ($null -ne (Get-OwnedTask $context)) { $remaining += 'startup task' }
+    if ($remaining.Count -gt 0) {
+        throw ('Setup left owned resources: ' + ($remaining -join ', '))
+    }
 }
 
 function Invoke-FailedWizard([string]$Fault, [string]$Tasks = '/TASKS=elevated') {
@@ -418,6 +420,8 @@ try {
     }
     $normalDb = Join-Path $context.NormalData 'history.db'
     foreach ($level in @('Highest','Limited')) {
+        & $testExe --isolated-desktop --empty-fixture-clipboard
+        if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before profile fixture.' }
         $choice = if ($level -eq 'Highest') { '/TASKS=elevated' } else { '/TASKS=""' }
         $started = [DateTime]::UtcNow
         Invoke-Wizard $previousFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART $choice /LOG=""$log"""
@@ -466,7 +470,19 @@ try {
             if ($helper.ExitCode -ne 0 -or
                 (Get-StartupEnabled (Get-OwnedTask $context)) -ne ($setting -eq 'on') -or
                 (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
-                throw 'Runtime startup toggle did not preserve the running process.'
+                throw "Runtime startup toggle failed ($setting, exit $($helper.ExitCode)) or did not preserve the running process."
+            }
+        }
+        $otherMode = if ($level -eq 'Highest') { 'normal' } else { 'administrator' }
+        $originalMode = if ($level -eq 'Highest') { 'administrator' } else { 'normal' }
+        foreach ($mode in @($otherMode,$originalMode)) {
+            $helper = Start-Process -FilePath $context.Exe -ArgumentList "--startup-setting $mode $($context.Sid)" -Wait -PassThru
+            $expectedLevel = if ($mode -eq 'administrator') { 'Highest' } else { 'Limited' }
+            if ($helper.ExitCode -ne 0 -or
+                (Get-OwnedTask $context).Principal.RunLevel -ne $expectedLevel -or
+                (Get-StartupEnabled (Get-OwnedTask $context)) -or
+                (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
+                throw "Runtime privilege choice failed ($mode, exit $($helper.ExitCode)) or altered active process/startup preference."
             }
         }
         Stop-ClipPlus $context

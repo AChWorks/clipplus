@@ -30,6 +30,7 @@ jobs:
       - name: Measure released-source baseline and candidate WPF performance
         shell: pwsh
         run: |
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | Format-List
           New-Item -ItemType Directory -Path TestResults -Force | Out-Null
           $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v020'
           git fetch --no-tags origin refs/tags/v0.2.0:refs/tags/v0.2.0

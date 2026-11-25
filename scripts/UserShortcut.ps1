@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory)][string]$ExpectedSid
 )
 $ErrorActionPreference = 'Stop'
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
 Set-StrictMode -Version Latest
 try {
     if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedSid -or

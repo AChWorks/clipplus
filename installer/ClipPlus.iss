@@ -68,6 +68,8 @@ Source: "{#PayloadDir}\UserShortcut.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]
 Type: files; Name: "{app}\setup-error.txt"
+; The overwritten log may not record creation of an existing registration directory.
+Type: dirifempty; Name: "{app}"
 
 [Code]
 var

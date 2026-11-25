@@ -31,7 +31,16 @@ internal static partial class Program
             store.MoveCategory(second, 0);
             for (var i = 0; i < 12; i++)
             {
-                var id = store.Capture(ClipPayload.FromText($"{name} payload {i}"));
+                var text = $"{name} payload {i} — سلام";
+                var formats = new Dictionary<ClipFormat, byte[]>
+                {
+                    [ClipFormat.UnicodeText] = Encoding.Unicode.GetBytes(text + "\0")
+                };
+                if (i % 3 == 0) formats[ClipFormat.Html] = Encoding.UTF8.GetBytes($"<b>{text}</b>\0");
+                if (i % 4 == 0) formats[ClipFormat.Png] = Convert.FromBase64String(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOwbz3wHwAFDwKEY5hFdAAAAABJRU5ErkJggg==");
+                if (i % 5 == 0) formats[ClipFormat.NoCloudUpload] = new byte[4];
+                var id = store.Capture(new ClipPayload(formats));
                 store.SetTitle(id, $"{name} title {i}");
                 store.SetColor(id, ClipColor.Green);
                 store.SetCategory(id, i % 2 == 0 ? category : second);
