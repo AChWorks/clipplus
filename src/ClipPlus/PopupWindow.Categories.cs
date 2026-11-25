@@ -106,12 +106,14 @@ public partial class PopupWindow
         if (active)
         {
             tab.SetResourceReference(BackgroundProperty, "CategorySelectedBrush");
+            tab.SetResourceReference(ForegroundProperty, "CategorySelectedTextBrush");
             tab.FontWeight = FontWeights.SemiBold;
         }
         else
         {
             tab.Background = System.Windows.Media.Brushes.Transparent;
             tab.BorderBrush = System.Windows.Media.Brushes.Transparent;
+            tab.SetResourceReference(ForegroundProperty, "TextBrush");
             tab.FontWeight = FontWeights.Normal;
         }
         AutomationProperties.SetItemStatus(tab, status);

@@ -67,8 +67,21 @@ function Read-Registration {
     return $uninstaller
 }
 
+function Invoke-StartupSetting([string]$Setting) {
+    $helper = Start-Process -FilePath $context.Exe -ArgumentList "--startup-setting $Setting $($context.Sid)" -PassThru
+    try {
+        if (-not $helper.WaitForExit(30000)) {
+            Stop-Process -Id $helper.Id -Force -ErrorAction SilentlyContinue
+            throw "Startup settings helper did not exit within the test timeout: $Setting."
+        }
+        return $helper.ExitCode
+    } finally {
+        $helper.Dispose()
+    }
+}
+
 function Install-Wizard {
-    Invoke-Wizard $setupFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
+    Invoke-Wizard $setupFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$log"""
 }
 
 function Assert-NoInstallation {
@@ -172,6 +185,12 @@ function Invoke-RecoveryInterruption([string]$Boundary) {
 
 function Invoke-InterruptedRollback([bool]$HadPrevious) {
     Invoke-InterruptedWizard
+    $taskBefore = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
+    $helperExit = Invoke-StartupSetting "off"
+    if ($helperExit -eq 0 -or (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $taskBefore) {
+        throw 'Startup control modified an uncommitted setup transaction.'
+    }
+    Write-Host 'PASS: startup setting changes are blocked until setup commits or recovers.'
     $journal = Join-Path $context.Transaction 'state.json'
     $backup = Join-Path $context.Transaction 'previous-app'
     $discard = Join-Path $context.Transaction 'failed-app'
@@ -225,17 +244,29 @@ function Invoke-InterruptedRollback([bool]$HadPrevious) {
     Write-Host "PASS: fresh wizard completed interrupted rollback cleanup and repeated recovery safely (previous=$HadPrevious)."
 }
 
-function Invoke-ScriptFixture([string]$Fault) {
+function Invoke-ScriptFixture([string]$Fault, [switch]$Released) {
     # Only isolated CI copies are modified. Release scripts have no test
     # switches. Environment.Exit bypasses catch/finally rollback.
     $fixture = Join-Path $fixtureRoot ([Guid]::NewGuid().ToString('N'))
     $app = Join-Path $fixture 'app'
     New-Item -ItemType Directory -Path $app -Force | Out-Null
-    foreach ($name in @('Install.ps1','Setup.Common.ps1','Invoke-Setup.ps1','UserShortcut.ps1')) {
-        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../scripts/$name") -Destination $fixture
-    }
     $exe = Join-Path $app 'ClipPlus.exe'
-    Copy-Item -LiteralPath $portableFile -Destination $exe
+    if ($Released) {
+        if ($Fault -ne 'after-move' -or (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash) {
+            throw 'Invalid released-version recovery fixture.'
+        }
+        foreach ($name in @('Install.ps1','Setup.Common.ps1','Invoke-Setup.ps1')) {
+            $source = git -C $PSScriptRoot show "f6199139acfe26b30c04b931b5819e9da10ed986:scripts/$name"
+            if ($LASTEXITCODE -ne 0) { throw "Could not read released source: $name" }
+            $source | Set-Content -LiteralPath (Join-Path $fixture $name) -Encoding utf8BOM
+        }
+        Copy-Item -LiteralPath $context.Exe -Destination $exe
+    } else {
+        foreach ($name in @('Install.ps1','Setup.Common.ps1','Invoke-Setup.ps1','UserShortcut.ps1')) {
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot "../scripts/$name") -Destination $fixture
+        }
+        Copy-Item -LiteralPath $portableFile -Destination $exe
+    }
     if ($Fault -eq 'activation-failure') {
         # Non-executable synthetic payload with a matching manifest:
         # the actual scheduled task must fail to start it.
@@ -243,7 +274,7 @@ function Invoke-ScriptFixture([string]$Fault) {
     }
     $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
     if ($Fault -eq 'corrupt-payload') { $hash = '0' * 64 }
-    @{product='AChWorks.ClipPlus';version=([Diagnostics.FileVersionInfo]::GetVersionInfo($portableFile).ProductVersion);rid='windows-anycpu';
+    @{product='AChWorks.ClipPlus';version=$(if ($Released) { '0.2.0' } else { [Diagnostics.FileVersionInfo]::GetVersionInfo($portableFile).ProductVersion });rid='windows-anycpu';
       files=@(@{path='ClipPlus.exe';sha256=$hash})} |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $fixture 'manifest.json') -Encoding utf8NoBOM
 
@@ -444,6 +475,17 @@ try {
         $trigger.Enabled = $auto
         Set-ScheduledTask -TaskName $context.Task -TaskPath '\' -Trigger $trigger | Out-Null
         Start-ClipPlusAndVerify $context
+        if ($level -eq 'Highest') {
+            Invoke-ScriptFixture 'after-move' -Released
+            if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
+                (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
+                (Get-OwnedTask $context).Principal.RunLevel -ne $level -or
+                (Get-StartupEnabled (Get-OwnedTask $context)) -ne $auto -or
+                (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+                throw 'Recovery of released v0.2.0 transaction changed installation or profile.'
+            }
+            Write-Host 'PASS: recovered an interrupted journal generated by exact released v0.2.0 source.'
+        }
         Invoke-FailedWizard 'after-activation' ''
         if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
             (Get-OwnedTask $context).Principal.RunLevel -ne $level -or
@@ -465,25 +507,32 @@ try {
         }
         $ready = Get-ReadyInstance $context ([DateTime]::MinValue)
         $appPid = $ready.pid
+        $scheduler = New-Object -ComObject Schedule.Service
+        $scheduler.Connect()
+        $taskFolder = $scheduler.GetFolder('\')
+        $taskDacl = $taskFolder.GetTask($context.Task).GetSecurityDescriptor(4)
         foreach ($setting in @('off','on','off')) {
-            $helper = Start-Process -FilePath $context.Exe -ArgumentList "--startup-setting $setting $($context.Sid)" -Wait -PassThru
-            if ($helper.ExitCode -ne 0 -or
+            $helperExit = Invoke-StartupSetting "$setting"
+            if ($helperExit -ne 0 -or
                 (Get-StartupEnabled (Get-OwnedTask $context)) -ne ($setting -eq 'on') -or
                 (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
-                throw "Runtime startup toggle failed ($setting, exit $($helper.ExitCode)) or did not preserve the running process."
+                throw "Runtime startup toggle failed ($setting, exit $helperExit) or did not preserve the running process."
             }
         }
         $otherMode = if ($level -eq 'Highest') { 'normal' } else { 'administrator' }
         $originalMode = if ($level -eq 'Highest') { 'administrator' } else { 'normal' }
         foreach ($mode in @($otherMode,$originalMode)) {
-            $helper = Start-Process -FilePath $context.Exe -ArgumentList "--startup-setting $mode $($context.Sid)" -Wait -PassThru
+            $helperExit = Invoke-StartupSetting "$mode"
             $expectedLevel = if ($mode -eq 'administrator') { 'Highest' } else { 'Limited' }
-            if ($helper.ExitCode -ne 0 -or
+            if ($helperExit -ne 0 -or
                 (Get-OwnedTask $context).Principal.RunLevel -ne $expectedLevel -or
                 (Get-StartupEnabled (Get-OwnedTask $context)) -or
                 (Get-ReadyInstance $context ([DateTime]::MinValue)).pid -ne $appPid) {
-                throw "Runtime privilege choice failed ($mode, exit $($helper.ExitCode)) or altered active process/startup preference."
+                throw "Runtime privilege choice failed ($mode, exit $helperExit) or altered active process/startup preference."
             }
+        }
+        if ($taskFolder.GetTask($context.Task).GetSecurityDescriptor(4) -ne $taskDacl) {
+            throw 'Runtime startup changes altered task access permissions.'
         }
         Stop-ClipPlus $context
         $launched = [DateTime]::UtcNow
@@ -498,6 +547,16 @@ try {
         }
         if ((Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
             throw 'Manual launch or startup toggle modified existing profile data.'
+        }
+        $helperExit = Invoke-StartupSetting "on"
+        if ($helperExit -ne 0 -or -not (Get-StartupEnabled (Get-OwnedTask $context))) {
+            throw "Could not re-enable logon startup (exit $helperExit)."
+        }
+        Stop-ClipPlus $context
+        Start-ClipPlusAndVerify $context
+        if (-not (Get-StartupEnabled (Get-OwnedTask $context)) -or
+            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw 'Re-enabled startup did not persist or restart changed history.'
         }
         # The old Inno uninstall log must not remove a reused common link.
         $reused = $shell.CreateShortcut($context.LegacyShortcut)
@@ -564,8 +623,9 @@ try {
     $installed = $true
     $null = Read-Registration
     $ready = Get-ReadyInstance $context $elevatedStarted
-    if ($null -eq $ready -or -not $ready.elevated -or (Get-OwnedTask $context).Principal.RunLevel -ne 'Highest') {
-        throw 'Installer administrator option did not start an elevated task.'
+    if ($null -eq $ready -or -not $ready.elevated -or (Get-OwnedTask $context).Principal.RunLevel -ne 'Highest' -or
+        -not (Get-StartupEnabled (Get-OwnedTask $context))) {
+        throw 'Fresh installation did not default to elevated automatic startup.'
     }
     Write-Host 'PASS: graphical installer registered Installed Apps and started elevated ClipPlus.'
     # An untrusted normal-state marker for the real PID must not establish

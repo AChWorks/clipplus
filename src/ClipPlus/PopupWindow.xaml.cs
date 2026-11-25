@@ -878,7 +878,9 @@ public partial class PopupWindow : Window
             Resources["FieldBrush"] = SystemColors.WindowBrush;
             Resources["CardBrush"] = SystemColors.WindowBrush;
             Resources["SelectedBrush"] = SystemColors.WindowBrush;
-            Resources["CategorySelectedBrush"] = SystemColors.ControlBrush;
+            Resources["CategorySelectedBrush"] = SystemColors.HighlightBrush;
+            Resources["CategorySelectedTextBrush"] = SystemColors.HighlightTextBrush;
+            Resources["CategorySelectedFocusBrush"] = SystemColors.HighlightTextBrush;
             Resources["HoverBrush"] = SystemColors.ControlBrush;
             Resources["TextBrush"] = SystemColors.WindowTextBrush;
             Resources["MutedBrush"] = SystemColors.WindowTextBrush;
@@ -897,6 +899,8 @@ public partial class PopupWindow : Window
         Set("SelectedBrush", "#EAF2FF", "#363E4A");
         Set("HoverBrush", "#E8E8E8", "#414141");
         Set("CategorySelectedBrush", "#DDDDDD", "#484848");
+        Set("CategorySelectedTextBrush", "#1D1D1D", "#F4F4F4");
+        Set("CategorySelectedFocusBrush", "#2562A8", "#9BC9FF");
         Set("TextBrush", "#1D1D1D", "#F4F4F4");
         Set("MutedBrush", "#595959", "#BBBBBB");
         Set("BorderBrush", "#D3D3D3", "#414141");

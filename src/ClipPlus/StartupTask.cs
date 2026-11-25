@@ -1,9 +1,7 @@
 using System;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Security.AccessControl;
 using System.Threading;
@@ -53,7 +51,8 @@ internal static class StartupTask
     {
         var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
         var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-        if (!administrators.Equals(security.GetOwner(typeof(SecurityIdentifier)))) return false;
+        if (!administrators.Equals(security.GetOwner(typeof(SecurityIdentifier))) ||
+            new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0).DiscretionaryAcl is null) return false;
         var readOnly = FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize;
         foreach (FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
             if (rule.AccessControlType == AccessControlType.Allow &&
@@ -75,7 +74,17 @@ internal static class StartupTask
         try { owned = mutex.WaitOne(0); }
         catch (AbandonedMutexException) { owned = true; }
         if (!owned) throw new InvalidOperationException("ClipPlus Setup is running. Try again after it finishes.");
-        try { return AccessTask(setting); }
+        try
+        {
+            // The activation script releases its lock while the wizard is
+            // completing registration. A nonterminal journal still owns
+            // task changes until the wizard commits or rolls back.
+            var transaction = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(InstalledExe))!,
+                ".transaction-" + Sid);
+            if (Directory.Exists(transaction))
+                throw new InvalidOperationException("ClipPlus Setup has an unfinished transaction. Finish or recover Setup first.");
+            return AccessTask(setting);
+        }
         finally { mutex.ReleaseMutex(); }
     }
 
