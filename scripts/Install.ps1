@@ -120,11 +120,30 @@ function Read-TransactionState($Context) {
     if ($null -ne $state.PSObject.Properties['hadUserShortcut'] -and $state.hadUserShortcut -isnot [bool]) {
         throw 'Invalid user shortcut transaction flag.'
     }
+    if ($null -ne $state.PSObject.Properties['shortcutStageId'] -and
+        ($state.shortcutStageId -isnot [string] -or $state.shortcutStageId -cnotmatch '^[0-9a-f]{32}$' -or
+         $null -eq $state.PSObject.Properties['hadUserShortcut'])) {
+        throw 'Invalid shortcut staging transaction identity.'
+    }
     if ($state.hadApp -and ($state.previousExeHash -notmatch '^[a-fA-F0-9]{64}$' -or
         $state.previousMarkerHash -notmatch '^[a-fA-F0-9]{64}$')) {
         throw 'Invalid previous-package identity.'
     }
     return $state
+}
+
+# Generate the trusted shortcut bytes only inside the protected transaction.
+# The Limited helper alone publishes or removes files in the user's Programs.
+function New-UserShortcutSource($Context) {
+    $source = Join-Path $Context.Transaction 'user-shortcut.lnk'
+    if (Test-Path -LiteralPath $source) { throw 'Unexpected shortcut source collision.' }
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($source)
+    $link.TargetPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'schtasks.exe'
+    $link.Arguments = '/run /tn "' + $Context.Task + '"'
+    $link.IconLocation = $Context.Exe + ',0'
+    $link.WindowStyle = 7
+    $link.Description = 'Open ClipPlus'
+    $link.Save()
 }
 
 function Get-RegExe {
@@ -164,7 +183,11 @@ function Restore-Registration($Context, $State) {
     }
     # New-format journals leave an already-owned user link unchanged. An
     # old-format journal predates the user link and must not touch it.
-    if ($null -ne $State.PSObject.Properties['hadUserShortcut'] -and -not $State.hadUserShortcut) {
+    if ($null -ne $State.PSObject.Properties['shortcutStageId']) {
+        $result = Invoke-UserShortcut $Context Rollback (Join-Path $Context.Transaction 'UserShortcut.ps1')
+        if ($result -eq 11) { Write-Warning 'Unrelated per-user shortcut or staging resource left unchanged.' }
+        elseif ($result -ne 0) { throw 'Could not roll back the per-user shortcut.' }
+    } elseif ($null -ne $State.PSObject.Properties['hadUserShortcut'] -and -not $State.hadUserShortcut) {
         $result = Invoke-UserShortcut $Context Remove (Join-Path $Context.Transaction 'UserShortcut.ps1')
         if ($result -notin @(0,11)) { throw 'Could not roll back the per-user shortcut.' }
     }
@@ -226,6 +249,10 @@ function Assert-RecoverySnapshots($Context, $State) {
         -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'UserShortcut.ps1') -PathType Leaf)) {
         throw 'Protected user shortcut helper snapshot is missing.'
     }
+    if ($null -ne $State.PSObject.Properties['shortcutStageId'] -and
+        -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'user-shortcut.lnk') -PathType Leaf)) {
+        throw 'Protected shortcut source snapshot is missing.'
+    }
     if ($State.hadShortcut -and -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'ClipPlus.lnk') -PathType Leaf)) {
         throw 'Previous shortcut snapshot is missing.'
     }
@@ -275,6 +302,8 @@ function Undo-Activation($Context, $State) {
 function Undo-Transaction($Context, $State) {
     if ($State.phase -eq 'committed') { throw 'The setup transaction already committed.' }
     if ($State.phase -eq 'activating') {
+        # Quiesce publication before restoring app/task/shortcut resources.
+        Remove-ShortcutHelperTask $Context
         Undo-Activation $Context $State
         Restore-Registration $Context $State
         $State.phase = 'rolled-back'
@@ -386,6 +415,7 @@ try {
         hadRegistration = $hadRegistration
         hadShortcut = $hadLegacyShortcut
         hadUserShortcut = $false
+        shortcutStageId = [Guid]::NewGuid().ToString('N')
     }
     New-Item -ItemType Directory -Path $context.Transaction | Out-Null
     $journalWritten = $false
@@ -395,9 +425,10 @@ try {
         $helper = Join-Path $context.Transaction 'UserShortcut.ps1'
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'UserShortcut.ps1') -Destination $helper
         $shortcutState = Invoke-UserShortcut $context Inspect $helper
-        if ($shortcutState -eq 11) { throw 'An unrelated per-user ClipPlus shortcut exists. Move or rename it before installing.' }
+        if ($shortcutState -eq 11) { throw 'An unrelated per-user ClipPlus shortcut or staging path exists. Move or rename it before installing.' }
         $state.hadUserShortcut = $shortcutState -eq 0
         Write-TransactionState $context $state
+        New-UserShortcutSource $context
         Save-Registration $context $state
         if ($state.hadTask) {
             Export-ScheduledTask -TaskName $context.Task -TaskPath '\' |

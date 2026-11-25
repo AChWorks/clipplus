@@ -396,7 +396,7 @@ function Get-ShortcutHelperTask($Context) {
     $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
     $allowed = @()
     foreach ($dir in @($Context.Transaction, $Context.RegistrationDir)) {
-        foreach ($action in @('Inspect','Create','Remove')) {
+        foreach ($action in @('Inspect','Create','Remove','Rollback')) {
             $allowed += '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' +
                 (Join-Path $dir 'UserShortcut.ps1') + '" -ExpectedSid "' + $Context.Sid + '" -Action ' + $action
         }
@@ -414,11 +414,18 @@ function Remove-ShortcutHelperTask($Context) {
     if ($null -eq $task) { return }
     if ($task.State -in @('Running','Queued')) {
         Stop-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\'
+        for ($i = 0; $i -lt 80; $i++) {
+            $task = Get-ShortcutHelperTask $Context
+            if ($null -eq $task) { return }
+            if ($task.State -notin @('Running','Queued')) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($task.State -in @('Running','Queued')) { throw 'The shortcut helper did not stop; preserve setup for recovery.' }
     }
     Unregister-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\' -Confirm:$false
 }
 
-function Invoke-UserShortcut($Context, [ValidateSet('Inspect','Create','Remove')][string]$Action, [string]$Script) {
+function Invoke-UserShortcut($Context, [ValidateSet('Inspect','Create','Remove','Rollback')][string]$Action, [string]$Script) {
     Assert-NoReparsePoint (Split-Path -Parent $Script)
     Assert-NoReparsePoint $Script
     if (-not (Test-Path -LiteralPath $Script -PathType Leaf)) { throw 'Protected shortcut helper is missing.' }

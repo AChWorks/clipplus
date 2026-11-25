@@ -48,6 +48,10 @@ if ($foreignSid -eq $context.Sid) { throw 'Unexpected fixture SID collision.' }
 $foreignShortcut = Join-Path (Split-Path -Parent $context.LegacyShortcut) "ClipPlus-$foreignSid.lnk"
 if (Test-Path -LiteralPath $foreignShortcut) { throw 'Foreign shortcut fixture already exists.' }
 $foreignCreated = $false
+$programs = Split-Path -Parent $context.Shortcut
+$unrelatedUserLink = Join-Path $programs ('Unrelated-' + [Guid]::NewGuid().ToString('N') + '.lnk')
+$unrelatedStage = Join-Path $programs ('.ClipPlus-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+$userFixturesCreated = $false
 
 function Invoke-Wizard([string]$Path,[string]$Arguments) {
     $process = Start-Process -FilePath $Path -ArgumentList $Arguments -Wait -PassThru
@@ -82,9 +86,20 @@ function Invoke-StartupSetting([string]$Setting) {
 
 function Install-Wizard {
     Invoke-Wizard $setupFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$log"""
+    Assert-NoStagingResidue
+}
+
+function Assert-NoStagingResidue {
+    # Read-only enumeration on the disposable runner. Production cleanup
+    # never enumerates or deletes by wildcard.
+    if (-not (Test-Path -LiteralPath $programs -PathType Container)) { return }
+    $remaining = @(Get-ChildItem -LiteralPath $programs -Force -Filter '.ClipPlus-*' |
+        Where-Object { $_.FullName -ine $unrelatedStage })
+    if ($remaining.Count -ne 0) { throw 'Unexpected shortcut staging residue in Programs.' }
 }
 
 function Assert-NoInstallation {
+    Assert-NoStagingResidue
     $remaining = @()
     foreach ($name in @('Install','LegacyShortcut','RegistrationDir','Shortcut','Transaction')) {
         if (Test-Path -LiteralPath $context.$name) { $remaining += $name }
@@ -116,6 +131,11 @@ function Assert-ForeignShortcut {
         (Get-FileHash -LiteralPath $foreignShortcut -Algorithm SHA256).Hash -ne $foreignShortcutHash) {
         throw 'A different SID shortcut was changed by this installation.'
     }
+    if ((Get-FileHash -LiteralPath $unrelatedUserLink -Algorithm SHA256).Hash -ne $unrelatedUserHash -or
+        (Get-FileHash -LiteralPath $unrelatedStage -Algorithm SHA256).Hash -ne $unrelatedStageHash) {
+        throw 'An unrelated per-user shortcut or similarly named staging file was changed.'
+    }
+    Assert-NoStagingResidue
 }
 
 function Invoke-RecoveryWizard {
@@ -282,6 +302,33 @@ function Invoke-ScriptFixture([string]$Fault, [switch]$Released) {
     $source = Get-Content -LiteralPath $script -Raw
     $anchor = $null
     $replacement = $null
+    $shortcutFault = $Fault -in @('shortcut-after-stage','shortcut-partial-stage','shortcut-replaced-stage')
+    if ($shortcutFault) {
+        # Terminate the actual Limited shortcut task, not a mock. Then
+        # interrupt its parent activation script after it observes exit 73.
+        # Both changes exist exclusively in disposable test copies.
+        $helperPath = Join-Path $fixture 'UserShortcut.ps1'
+        $helperSource = Get-Content -LiteralPath $helperPath -Raw
+        if ($Fault -eq 'shortcut-partial-stage') {
+            $helperAnchor = '            $sourceStream.CopyTo($output)'
+            $helperReplacement = @(
+                '            $output.WriteByte([byte]$sourceStream.ReadByte())'
+                '            $output.Flush($true)'
+                '            [Environment]::Exit(73)'
+            ) -join [Environment]::NewLine
+        } else {
+            $helperAnchor = '    [IO.File]::Move($stage, $path)'
+            $helperReplacement = '    [Environment]::Exit(73)' + [Environment]::NewLine + $helperAnchor
+        }
+        if ([regex]::Matches($helperSource,[regex]::Escape($helperAnchor)).Count -ne 1) {
+            throw 'Shortcut fixture injection anchor changed.'
+        }
+        $helperSource.Replace($helperAnchor,$helperReplacement) |
+            Set-Content -LiteralPath $helperPath -Encoding utf8BOM
+        $anchor = '        $failure = $_'
+        $replacement = $anchor + [Environment]::NewLine +
+            '        if ($failure.Exception.Message -match "User shortcut operation failed [(]Create, result 73[)]") { [Environment]::Exit(73) }'
+    }
     switch ($Fault) {
         'before-journal' {
             $anchor = '    New-Item -ItemType Directory -Path $context.Transaction | Out-Null'
@@ -303,7 +350,56 @@ function Invoke-ScriptFixture([string]$Fault, [switch]$Released) {
     $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell/v1.0/powershell.exe'
     $result = Start-Process -FilePath $powershell -Wait -PassThru -ArgumentList (
         "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""$fixture\Invoke-Setup.ps1"" -Action Install -ExpectedSid ""$($context.Sid)""")
-    if ($Fault -in @('before-journal','after-move')) {
+    if ($shortcutFault) {
+        if ($result.ExitCode -ne 73 -or -not (Test-Path -LiteralPath $context.Transaction)) {
+            $errorPath = Join-Path $fixture 'setup-error.txt'
+            if (Test-Path -LiteralPath $errorPath) { Get-Content -LiteralPath $errorPath | Write-Host }
+            throw "Shortcut interruption did not leave its expected journal (exit $($result.ExitCode))."
+        }
+        $state = Get-Content -LiteralPath (Join-Path $context.Transaction 'state.json') -Raw | ConvertFrom-Json
+        if ($state.phase -ne 'activating' -or $state.hadUserShortcut -or
+            $state.shortcutStageId -cnotmatch '^[0-9a-f]{32}$') { throw 'Unexpected shortcut interruption journal.' }
+        $stagePath = Join-Path $programs ('.ClipPlus-' + $state.shortcutStageId + '.tmp')
+        $sourcePath = Join-Path $context.Transaction 'user-shortcut.lnk'
+        if ((Test-Path -LiteralPath $context.Shortcut) -or
+            -not (Test-Path -LiteralPath $stagePath -PathType Leaf) -or
+            $null -ne (Get-ShortcutHelperTask $context)) {
+            throw 'The helper did not terminate before final shortcut publication.'
+        }
+        if ($Fault -eq 'shortcut-partial-stage') {
+            $partial = [IO.File]::ReadAllBytes($stagePath)
+            $expected = [IO.File]::ReadAllBytes($sourcePath)
+            if ($partial.Length -ne 1 -or $partial[0] -ne $expected[0]) {
+                throw 'Expected a real incomplete shortcut copy.'
+            }
+        } elseif ((Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash) {
+            throw 'Expected the real complete staged shortcut bytes.'
+        }
+        $replacementHash = $null
+        if ($Fault -eq 'shortcut-replaced-stage') {
+            # Simulate an unrelated file replacing the exact reserved name
+            # before recovery. It must not be removed merely by filename.
+            [IO.File]::WriteAllBytes($stagePath, [byte[]](255,0,255))
+            $replacementHash = (Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash
+        }
+        Invoke-RecoveryWizard
+        Invoke-RecoveryWizard
+        if ($Fault -eq 'shortcut-replaced-stage') {
+            if ((Get-FileHash -LiteralPath $stagePath -Algorithm SHA256).Hash -ne $replacementHash) {
+                throw 'Recovery removed or altered an unrelated replacement staging file.'
+            }
+            # This exact file was created by the test immediately above.
+            Remove-Item -LiteralPath $stagePath
+        } elseif (Test-Path -LiteralPath $stagePath) {
+            throw 'Journal recovery left the interrupted owned shortcut stage.'
+        }
+        if ((Test-Path -LiteralPath $context.Shortcut) -or $null -ne (Get-ShortcutHelperTask $context)) {
+            throw 'Shortcut rollback left a final shortcut or helper task.'
+        }
+        Assert-ForeignShortcut
+        Write-Host "PASS: actual shortcut helper interruption ($Fault, previous=$($state.hadApp)) recovered twice without owned shortcut residue or unrelated resource changes."
+    } elseif ($Fault -in @('before-journal','after-move')) {
         if ($result.ExitCode -ne 73 -or -not (Test-Path -LiteralPath $context.Transaction)) {
             throw "Abrupt $Fault fixture did not leave the expected journal boundary (exit $($result.ExitCode))."
         }
@@ -361,6 +457,7 @@ function Remove-Wizard {
     Invoke-Wizard $uninstaller "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$uninstallLog"""
     if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $context.Install) -or
         $null -ne (Get-OwnedTask $context)) { throw 'Uninstall did not remove all owned program resources.' }
+    Assert-NoStagingResidue
 }
 
 try {
@@ -380,6 +477,37 @@ try {
     $foreignLink.Save()
     $foreignCreated = $true
     $foreignShortcutHash = (Get-FileHash -LiteralPath $foreignShortcut -Algorithm SHA256).Hash
+    if ((Test-Path -LiteralPath $unrelatedUserLink) -or (Test-Path -LiteralPath $unrelatedStage)) {
+        throw 'Unexpected per-user fixture collision.'
+    }
+    Assert-NoStagingResidue
+    $userFixturesCreated = $true
+    [IO.Directory]::CreateDirectory($programs) | Out-Null
+    $userLink = $shell.CreateShortcut($unrelatedUserLink)
+    $userLink.TargetPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'notepad.exe'
+    $userLink.Save()
+    [IO.File]::WriteAllBytes($unrelatedStage, [byte[]](9,8,7,6))
+    $unrelatedUserHash = (Get-FileHash -LiteralPath $unrelatedUserLink -Algorithm SHA256).Hash
+    $unrelatedStageHash = (Get-FileHash -LiteralPath $unrelatedStage -Algorithm SHA256).Hash
+
+    # An unrelated link occupying the exact public shortcut name must not
+    # be overwritten by setup or removed by its preparation rollback.
+    [IO.File]::Copy($unrelatedUserLink, $context.Shortcut, $false)
+    try {
+        $collision = Start-Process -FilePath $setupFile -Wait -PassThru -ArgumentList (
+            "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$log""")
+        if ($collision.ExitCode -eq 0 -or
+            (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $unrelatedUserHash -or
+            (Get-Content -LiteralPath $log -Raw) -notmatch 'unrelated per-user ClipPlus shortcut or staging path') {
+            throw 'Setup did not preserve an unrelated ClipPlus.lnk collision.'
+        }
+    } finally {
+        # This exact collision was created by the test after the initial guard.
+        if (Test-Path -LiteralPath $context.Shortcut) { Remove-Item -LiteralPath $context.Shortcut }
+    }
+    Assert-NoInstallation
+    Assert-ForeignShortcut
+    Write-Host 'PASS: setup preserved an unrelated per-user ClipPlus.lnk and refused installation.'
 
     # Real released-version upgrade and rollback: verify both the old setup
     # and its installed executable by their immutable release checksums.
@@ -485,6 +613,20 @@ try {
                 throw 'Recovery of released v0.2.0 transaction changed installation or profile.'
             }
             Write-Host 'PASS: recovered an interrupted journal generated by exact released v0.2.0 source.'
+            $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
+            $oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
+            $oldUninstallerHash = (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash
+            Invoke-ScriptFixture 'shortcut-after-stage'
+            if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
+                (Get-FileHash -LiteralPath $context.LegacyShortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
+                (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarkerHash -or
+                (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash -ne $oldUninstallerHash -or
+                (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
+                (Get-OwnedTask $context).State -ne 'Running' -or
+                (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+                throw 'Interrupted shortcut migration did not restore exact released resources and both histories.'
+            }
+            Write-Host 'PASS: interrupted v0.2.0 shortcut migration restored prior executable, marker, task XML, registration, legacy shortcut and both complete histories.'
         }
         Invoke-FailedWizard 'after-activation' ''
         if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $previousExeHash -or
@@ -505,6 +647,7 @@ try {
             (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
             throw 'v0.2.0 update changed startup, shortcut or profile.'
         }
+        Assert-ForeignShortcut
         $ready = Get-ReadyInstance $context ([DateTime]::MinValue)
         $appPid = $ready.pid
         $scheduler = New-Object -ComObject Schedule.Service
@@ -607,6 +750,11 @@ try {
     $portableProcess.WaitForExit()
     $portableProcess = $null
 
+    foreach ($shortcutFault in @('shortcut-after-stage','shortcut-partial-stage','shortcut-replaced-stage')) {
+        Invoke-ScriptFixture $shortcutFault
+        Assert-NoInstallation
+        Assert-ForeignShortcut
+    }
     Invoke-ScriptFixture 'before-journal'
     Assert-NoInstallation
     Assert-ForeignShortcut
@@ -739,6 +887,11 @@ try {
 } finally {
     if ($null -ne $portableProcess -and -not $portableProcess.HasExited) { Stop-Process -Id $portableProcess.Id -Force }
     if ($foreignCreated -and (Test-Path -LiteralPath $foreignShortcut)) { Remove-Item -LiteralPath $foreignShortcut -Force }
+    if ($userFixturesCreated) {
+        foreach ($path in @($unrelatedUserLink,$unrelatedStage)) {
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+        }
+    }
     if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
     if ($installed -and (Test-Path -LiteralPath $registration)) {
         try { Remove-Wizard } catch { Write-Warning "Runner cleanup: $_" }
