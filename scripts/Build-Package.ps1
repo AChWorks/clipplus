@@ -62,7 +62,7 @@ try {
     @{ product='AChWorks.ClipPlus'; version=$version; rid='windows-anycpu'; files=@(
         @{ path='ClipPlus.exe'; sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash }
     ) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $payload 'manifest.json') -Encoding utf8NoBOM
-    foreach ($name in @('Install.ps1','Uninstall.ps1','Setup.Common.ps1','Invoke-Setup.ps1')) {
+    foreach ($name in @('Install.ps1','Uninstall.ps1','UserShortcut.ps1','Setup.Common.ps1','Invoke-Setup.ps1')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $payload
     }
     $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue

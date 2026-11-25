@@ -38,6 +38,9 @@ internal static partial class Program
         if (args.Contains("--installed-flow"))
             return InstalledFlow.Run(args);
 
+        if (args.Contains("--seed-v020-profile") || args.Contains("--snapshot-v020-profile")) return ProfileFixture(args);
+        if (args.Contains("--popup-benchmark")) return PopupBenchmark();
+
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         using var first = new HwndSource(new HwndSourceParameters("ClipPlus smoke sender") { WindowStyle = 0 });
         using var second = new HwndSource(new HwndSourceParameters("ClipPlus smoke receiver") { WindowStyle = 0 });
@@ -166,7 +169,7 @@ internal static partial class Program
             var contentMatch = store.Capture(ClipPayload.FromText("Search priority in content"));
             store.SetPinned(contentMatch, true);
             search.Text = "Search priority";
-            Check(list.Items.Count == 2 && ((System.Windows.Controls.ListBoxItem)list.Items[0]).Tag is long ranked && ranked == titleMatch,
+            Check(list.Items.Count == 2 && ((PopupWindow.HistoryEntry)list.Items[0]).Item.Id == titleMatch,
                 "WPF title match precedes pinned content match");
             search.Text = "No Title";
             Check(list.Items.Count == 0, "WPF untitled placeholder is not searchable");
@@ -208,6 +211,7 @@ internal static partial class Program
                   Math.Abs(indicator.ActualWidth - expectedIndicatorWidth) <= 0.5,
                 "Windows-style scrollbar has narrow indicator and 12-DIP interaction area");
             Check(viewer.ScrollableHeight > 0 && bar.Maximum > 0, "native scroll range remains usable");
+            Check(Descendants<ListBoxItem>(list).Count() < list.Items.Count, "overflowing history realizes only a subset of cards");
             viewer.ScrollToBottom();
             popup.UpdateLayout();
             Check(viewer.VerticalOffset > 0 && Math.Abs(bar.Value - viewer.VerticalOffset) < 1,
@@ -286,6 +290,19 @@ internal static partial class Program
             fit = PopupWindow.FitBounds(large, 1, new Native.Point { X = 1900, Y = 1000 }, 650, false);
             Check(fit.Right == large.Right && fit.Bottom == large.Bottom && fit.Bottom - fit.Top == 650,
                 "larger destination restores preferred height");
+            search.Text = "";
+            foreach (var category in store.Categories()) store.DeleteCategory(category.Id);
+            foreach (var clip in store.List().Where(item => item.Pinned)) store.SetPinned(clip.Id, false);
+            store.ClearRecent();
+            popup.HistoryChanged();
+            popup.UpdateLayout();
+            var pinnedTab = (Button)popup.FindName("PinnedTab");
+            var recentTab = (Button)popup.FindName("RecentTab");
+            Check(list.Items.Count == 0 && pinnedTab.Visibility == Visibility.Collapsed &&
+                recentTab.IsVisible && preferences.ActiveView == ClipStore.RecentView &&
+                !((Button)popup.FindName("ClearButton")).IsEnabled, "empty history hides Pinned and keeps Recent and add controls");
+            SavePopupEvidence(popup, "categories-empty");
+            VerifyAppearance(popup, store);
             popup.HidePopup();
             popup.Close();
             Console.WriteLine("Windows smoke checks completed; physical hotkey, interactive paste, elevation, resize and lifecycle still require desktop acceptance.");
@@ -301,6 +318,51 @@ internal static partial class Program
                 finally { Native.CloseClipboard(); }
             }
             application.Shutdown();
+        }
+    }
+
+    // Change only the disposable hosted CI account's appearance preference,
+    // and restore it even if a test fails. Never change a developer's theme.
+    private static void VerifyAppearance(PopupWindow popup, ClipStore store)
+    {
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true" ||
+            Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") != "github-hosted" || SystemParameters.HighContrast)
+        {
+            Console.WriteLine("SKIPPED: hosted light/dark preference test unavailable.");
+            return;
+        }
+        using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(
+            @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+        const string valueName = "AppsUseLightTheme";
+        var original = key.GetValue(valueName);
+        var originalKind = original is null ? Microsoft.Win32.RegistryValueKind.DWord : key.GetValueKind(valueName);
+        var clip = store.Capture(ClipPayload.FromText("Synthetic theme preview - نمونه فارسی"));
+        store.SetPinned(clip, true);
+        store.SetTitle(clip, "Theme test");
+        var category = store.CreateCategory("دسته نمونه");
+        store.SetCategory(clip, category);
+        try
+        {
+            foreach (var light in new[] { 1, 0 })
+            {
+                key.SetValue(valueName, light, Microsoft.Win32.RegistryValueKind.DWord);
+                popup.HidePopup();
+                popup.ShowAt(Native.Anchor(Native.GetForegroundWindow()));
+                var pinned = (Button)popup.FindName("PinnedTab");
+                pinned.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, pinned));
+                popup.UpdateLayout();
+                var background = (SolidColorBrush)popup.FindResource("PanelBrush");
+                var selected = (SolidColorBrush)popup.FindResource("CategorySelectedBrush");
+                var hover = (SolidColorBrush)popup.FindResource("HoverBrush");
+                Check(background.Color.R == (light == 1 ? 245 : 32) && selected.Color != hover.Color,
+                    $"actual WPF appearance follows Windows user {(light == 1 ? "light" : "dark")} preference");
+                SavePopupEvidence(popup, light == 1 ? "categories-light" : "categories-dark");
+            }
+        }
+        finally
+        {
+            if (original is null) key.DeleteValue(valueName, false);
+            else key.SetValue(valueName, original, originalKind);
         }
     }
 

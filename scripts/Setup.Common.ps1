@@ -25,7 +25,9 @@ function Get-ClipPlusContext {
         Task = "ClipPlus-$sid"
         RegistrationDir = Join-Path (Join-Path $root 'Installers') $sid
         RegistrationKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ClipPlus-$($sid)_is1"
-        Shortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)) "ClipPlus-$sid.lnk"
+        Shortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs, [Environment+SpecialFolderOption]::DoNotVerify)) 'ClipPlus.lnk'
+        LegacyShortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)) "ClipPlus-$sid.lnk"
+        ShortcutTask = "ClipPlus-Shortcut-$sid"
         Transaction = Join-Path $root ".transaction-$sid"
     }
 }
@@ -94,19 +96,29 @@ function Assert-OwnedInstall($Context, [string]$Path) {
     }
 }
 
+function Find-RootTask([string]$Name) {
+    try { return Get-ScheduledTask -TaskName $Name -TaskPath '\' -ErrorAction Stop }
+    catch {
+        if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { return $null }
+        throw
+    }
+}
+
+function ConvertTo-AccountSid([string]$User) {
+    if ($User -match '^S-1-') { return $User }
+    return ([Security.Principal.NTAccount]::new($User)).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
 function Get-OwnedTask($Context) {
-    $task = Get-ScheduledTask -TaskName $Context.Task -TaskPath '\' -ErrorAction SilentlyContinue
+    $task = Find-RootTask $Context.Task
     if ($null -eq $task) { return $null }
     $actions = @($task.Actions)
-    if ($actions.Count -ne 1 -or $actions[0].Execute -ine $Context.Exe) {
+    if ($actions.Count -ne 1 -or $actions[0].Execute -ine $Context.Exe -or
+        $actions[0].Arguments -cne '--startup' -or $actions[0].WorkingDirectory -ine $Context.Install -or
+        $task.Principal.LogonType -ne 'Interactive') {
         throw "The existing scheduled task is not owned by this ClipPlus installation: $($Context.Task)"
     }
-    $taskUser = $task.Principal.UserId
-    if ($taskUser -match '^S-1-') {
-        $taskSid = $taskUser
-    } else {
-        $taskSid = ([Security.Principal.NTAccount]::new($taskUser)).Translate([Security.Principal.SecurityIdentifier]).Value
-    }
+    $taskSid = ConvertTo-AccountSid $task.Principal.UserId
     if ($taskSid -ne $Context.Sid) { throw 'The existing ClipPlus task belongs to a different user.' }
     return $task
 }
@@ -152,9 +164,21 @@ function Stop-ClipPlus($Context) {
     throw 'The existing ClipPlus process did not stop. Close it from the tray and retry.'
 }
 
-function Register-ClipPlusTask($Context, [switch]$NormalStartup) {
+function Get-StartupEnabled($Task) {
+    if ($null -eq $Task) { return $true }
+    $triggers = @($Task.Triggers)
+    if ($triggers.Count -eq 0) { return $false }
+    if ($triggers.Count -ne 1 -or $triggers[0].CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger' -or
+        (ConvertTo-AccountSid $triggers[0].UserId) -ne (ConvertTo-AccountSid $Task.Principal.UserId)) {
+        throw 'Unexpected ClipPlus logon trigger configuration.'
+    }
+    return [bool]($Task.Settings.Enabled -and $triggers[0].Enabled)
+}
+
+function Register-ClipPlusTask($Context, [switch]$NormalStartup, [bool]$AutomaticStartup = $true) {
     $action = New-ScheduledTaskAction -Execute $Context.Exe -Argument '--startup' -WorkingDirectory $Context.Install
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Context.User
+    $trigger.Enabled = $AutomaticStartup
     $level = if ($NormalStartup) { "Limited" } else { "Highest" }
     $principal = New-ScheduledTaskPrincipal -UserId $Context.User -LogonType Interactive -RunLevel $level
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
@@ -170,7 +194,7 @@ function Register-ClipPlusTask($Context, [switch]$NormalStartup) {
     }
     Register-ScheduledTask @arguments | Out-Null
     $task = Get-OwnedTask $Context
-    if ($null -eq $task -or $task.Principal.RunLevel -ne $level -or $task.Principal.LogonType -ne 'Interactive') {
+    if ($null -eq $task -or $task.Principal.RunLevel -ne $level -or $task.Principal.LogonType -ne 'Interactive' -or (Get-StartupEnabled $task) -ne $AutomaticStartup) {
         throw 'Task Scheduler did not register the expected interactive task.'
     }
 }
@@ -349,4 +373,82 @@ function Enter-SetupLock($Context) {
         $mutex.Dispose()
         throw
     }
+}
+
+# The legacy common link is in the system Programs folder. Validate both
+# the path and its exact task target before touching it.
+function Test-OwnedLegacyShortcut($Context) {
+    for ($path = $Context.LegacyShortcut; $path; $path = [IO.Path]::GetDirectoryName($path)) {
+        Assert-NoReparsePoint $path
+    }
+    if (-not (Test-Path -LiteralPath $Context.LegacyShortcut)) { return $false }
+    if (-not (Test-Path -LiteralPath $Context.LegacyShortcut -PathType Leaf)) { return $false }
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($Context.LegacyShortcut)
+    $target = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'schtasks.exe'
+    return ($link.TargetPath -ieq $target -and $link.Arguments -ieq ('/run /tn "' + $Context.Task + '"'))
+}
+
+function Get-ShortcutHelperTask($Context) {
+    $task = Find-RootTask $Context.ShortcutTask
+    if ($null -eq $task) { return $null }
+    $actions = @($task.Actions)
+    $user = ConvertTo-AccountSid $task.Principal.UserId
+    $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
+    $allowed = @()
+    foreach ($dir in @($Context.Transaction, $Context.RegistrationDir)) {
+        foreach ($action in @('Inspect','Create','Remove','Rollback')) {
+            $allowed += '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' +
+                (Join-Path $dir 'UserShortcut.ps1') + '" -ExpectedSid "' + $Context.Sid + '" -Action ' + $action
+        }
+    }
+    if ($actions.Count -ne 1 -or $actions[0].Execute -ine $powershell -or
+        $actions[0].Arguments -notin $allowed -or $user -ne $Context.Sid -or
+        $task.Principal.LogonType -ne 'Interactive' -or $task.Principal.RunLevel -ne 'Limited') {
+        throw 'Unexpected task occupies the ClipPlus shortcut helper name.'
+    }
+    return $task
+}
+
+function Remove-ShortcutHelperTask($Context) {
+    $task = Get-ShortcutHelperTask $Context
+    if ($null -eq $task) { return }
+    if ($task.State -in @('Running','Queued')) {
+        Stop-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\'
+        for ($i = 0; $i -lt 80; $i++) {
+            $task = Get-ShortcutHelperTask $Context
+            if ($null -eq $task) { return }
+            if ($task.State -notin @('Running','Queued')) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($task.State -in @('Running','Queued')) { throw 'The shortcut helper did not stop; preserve setup for recovery.' }
+    }
+    Unregister-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\' -Confirm:$false
+}
+
+function Invoke-UserShortcut($Context, [ValidateSet('Inspect','Create','Remove','Rollback')][string]$Action, [string]$Script) {
+    Assert-NoReparsePoint (Split-Path -Parent $Script)
+    Assert-NoReparsePoint $Script
+    if (-not (Test-Path -LiteralPath $Script -PathType Leaf)) { throw 'Protected shortcut helper is missing.' }
+    Remove-ShortcutHelperTask $Context
+    $powershell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $Script +
+        '" -ExpectedSid "' + $Context.Sid + '" -Action ' + $Action
+    $taskAction = New-ScheduledTaskAction -Execute $powershell -Argument $arguments
+    $principal = New-ScheduledTaskPrincipal -UserId $Context.User -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromMinutes(1))
+    Register-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\' -Action $taskAction -Principal $principal -Settings $settings | Out-Null
+    try {
+        $before = (Get-ScheduledTaskInfo -TaskName $Context.ShortcutTask -TaskPath '\').LastRunTime
+        Start-ScheduledTask -TaskName $Context.ShortcutTask -TaskPath '\'
+        for ($i = 0; $i -lt 80; $i++) {
+            Start-Sleep -Milliseconds 250
+            $info = Get-ScheduledTaskInfo -TaskName $Context.ShortcutTask -TaskPath '\'
+            $task = Get-ShortcutHelperTask $Context
+            if ($info.LastRunTime -ne $before -and $task.State -notin @('Running','Queued')) {
+                if ($info.LastTaskResult -in @(0,10,11)) { return [int]$info.LastTaskResult }
+                throw "User shortcut operation failed ($Action, result $($info.LastTaskResult))."
+            }
+        }
+        throw "Timed out waiting for the user shortcut operation ($Action)."
+    } finally { Remove-ShortcutHelperTask $Context }
 }

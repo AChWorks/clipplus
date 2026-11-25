@@ -91,32 +91,41 @@ public partial class PopupWindow
         CategoryNavigation.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
         SearchScope.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
         var label = _compact ? "Expand titled clips" : "Collapse titled clips";
-        CompactButton.Content = Glyph(_compact ? "\uE70D" : "\uE70E");
-        CompactButton.ToolTip = label;
-        AutomationProperties.SetName(CompactButton, label);
+        if (CompactButton.Content is null || AutomationProperties.GetName(CompactButton) != label)
+        {
+            CompactButton.Content = Glyph(_compact ? "\uE70D" : "\uE70E");
+            CompactButton.ToolTip = label;
+            AutomationProperties.SetName(CompactButton, label);
+        }
     }
 
     private static void SetTabState(Button tab, bool active)
     {
+        var status = active ? "Selected" : "";
+        if (AutomationProperties.GetItemStatus(tab) == status) return;
         if (active)
         {
-            tab.SetResourceReference(BackgroundProperty, "SelectedBrush");
-            tab.SetResourceReference(BorderBrushProperty, "FocusBrush");
+            tab.SetResourceReference(BackgroundProperty, "CategorySelectedBrush");
+            tab.SetResourceReference(ForegroundProperty, "CategorySelectedTextBrush");
             tab.FontWeight = FontWeights.SemiBold;
         }
         else
         {
             tab.Background = System.Windows.Media.Brushes.Transparent;
             tab.BorderBrush = System.Windows.Media.Brushes.Transparent;
+            tab.SetResourceReference(ForegroundProperty, "TextBrush");
             tab.FontWeight = FontWeights.Normal;
         }
-        AutomationProperties.SetItemStatus(tab, active ? "Selected" : "");
+        AutomationProperties.SetItemStatus(tab, status);
     }
 
     private void SelectView(long view)
     {
-        _activeView = view;
-        PersistView();
+        if (_activeView != view)
+        {
+            _activeView = view;
+            PersistView();
+        }
         // Keep the tab objects alive when merely changing views, so a
         // second mouse click still reaches the same tab for inline editing.
         Refresh(false);
@@ -143,7 +152,7 @@ public partial class PopupWindow
                     Text = category.Name, MaxWidth = 100, TextTrimming = TextTrimming.CharacterEllipsis,
                     FlowDirection = TextDirection(category.Name)
                 },
-                FontSize = 12, Padding = new Thickness(6, 2, 6, 2), Margin = new Thickness(0, 0, 2, 0),
+                Style = (Style)FindResource("CategoryChip"),
                 ToolTip = $"{category.Name}\nDouble-click or F2 to edit; drag or Ctrl+Left/Right to reorder"
             };
             AutomationProperties.SetName(tab, category.Name);
@@ -263,7 +272,7 @@ public partial class PopupWindow
         var category = _categories.FirstOrDefault(c => c.Id == id);
         if (id.HasValue && category is null) return;
         _editingCategory = id;
-        var host = new Grid { Margin = new Thickness(0, 0, 2, 0) };
+        var host = new Grid { Margin = new Thickness(0, 0, 3, 0) };
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var editor = new TextBox
@@ -274,6 +283,7 @@ public partial class PopupWindow
         AutomationProperties.SetName(editor, "Category name");
         host.Children.Add(editor);
         var action = IconButton(Glyph(id.HasValue ? "\uE711" : "\uE73E"), id.HasValue ? "Delete category" : "Save category");
+        action.Margin = new Thickness(4, 0, 0, 0);
         Grid.SetColumn(action, 1);
         host.Children.Add(action);
         var confirming = false;
@@ -294,7 +304,11 @@ public partial class PopupWindow
             Refresh(false);
             FocusSearch();
         });
-        editor.TextChanged += (_, _) => { if (confirming) SetDeleteConfirmation(false); };
+        editor.TextChanged += (_, _) =>
+        {
+            editor.FlowDirection = TextDirection(editor.Text);
+            if (confirming) SetDeleteConfirmation(false);
+        };
         _categoryEditHost = host;
         _categoryEditor = editor;
         if (id is long editing && _categoryButtons.TryGetValue(editing, out var original))
@@ -357,32 +371,35 @@ public partial class PopupWindow
     private Button MakeCategoryButton(ClipItem item, bool compact)
     {
         var category = _categories.FirstOrDefault(c => c.Id == item.CategoryId);
-        var label = category is null ? "+" : category.Name;
+        if (category is null)
+        {
+            var add = IconButton(Glyph("\uE710"), "Assign category");
+            add.HorizontalAlignment = HorizontalAlignment.Left;
+            return add;
+        }
+        var label = category.Name;
         var text = new TextBlock
         {
-            Text = label, FontSize = category is null ? 14 : 11,
+            Text = label, FontSize = 11,
             MaxWidth = compact ? 66 : 160, TextTrimming = TextTrimming.CharacterEllipsis,
             FlowDirection = TextDirection(label), VerticalAlignment = VerticalAlignment.Center
         };
         text.SetResourceReference(ForegroundProperty, "MutedBrush");
         var content = new StackPanel { Orientation = Orientation.Horizontal };
         content.Children.Add(text);
-        if (category is not null)
-        {
-            var arrow = Glyph("\uE70D");
-            arrow.FontSize = 9;
-            arrow.Margin = new Thickness(3, 0, 0, 0);
-            arrow.VerticalAlignment = VerticalAlignment.Center;
-            content.Children.Add(arrow);
-        }
-        var description = category is null ? "Assign category" : $"Change category: {category.Name}";
+        var arrow = Glyph("\uE70D");
+        arrow.FontSize = 9;
+        arrow.Margin = new Thickness(3, 0, 0, 0);
+        arrow.VerticalAlignment = VerticalAlignment.Center;
+        content.Children.Add(arrow);
+        var description = $"Change category: {category.Name}";
         var button = new Button
         {
-            Content = content, FontSize = 11, MinHeight = compact ? 26 : 20,
+            Style = (Style)FindResource("CategoryChip"), Content = content, FontSize = 11, MinHeight = 26,
             Padding = new Thickness(3, 0, 3, 0), HorizontalAlignment = HorizontalAlignment.Left,
             ToolTip = description, Margin = compact ? new Thickness(0) : new Thickness(0, 1, 0, 0)
         };
-        if (!compact) button.SetResourceReference(BackgroundProperty, "FieldBrush");
+
         AutomationProperties.SetName(button, description);
         return button;
     }
@@ -399,7 +416,7 @@ public partial class PopupWindow
         ClosePalette(false);
         EndCategoryEdit();
         CloseCategoryPicker(false);
-        ClipList.SelectedItem = row.Container;
+        ClipList.SelectedItem = row.Entry;
         _openCategoryRow = row;
         row.CategoryChoices.Children.Clear();
         void Choice(string name, long? id)
@@ -412,8 +429,10 @@ public partial class PopupWindow
                     Text = selected ? "✓ " + name : name, MaxWidth = 170,
                     TextTrimming = TextTrimming.CharacterEllipsis, FlowDirection = TextDirection(name)
                 },
-                FontSize = 12, Padding = new Thickness(5, 2, 5, 2), ToolTip = name
+                Style = (Style)FindResource("CategoryChip"), Padding = new Thickness(5, 2, 5, 2),
+                Margin = new Thickness(0, 0, 3, 3), ToolTip = name
             };
+            SetTabState(button, selected);
             var actionName = id.HasValue ? $"Assign to {name}" : "No category";
             AutomationProperties.SetName(button, selected ? $"{actionName}, selected" : actionName);
             button.Click += (_, _) => Run(() =>

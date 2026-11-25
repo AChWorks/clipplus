@@ -23,6 +23,9 @@ try {
     }
     if (Test-Path -LiteralPath $context.Install) { Assert-OwnedInstall $context $context.Install }
     $task = Get-OwnedTask $context
+    $result = Invoke-UserShortcut $context Remove (Join-Path $PSScriptRoot 'UserShortcut.ps1')
+    if ($result -notin @(0,11)) { throw 'Could not remove the owned Start Menu shortcut.' }
+    if (Test-OwnedLegacyShortcut $context) { Remove-Item -LiteralPath $context.LegacyShortcut -Force }
     Stop-ClipPlus $context
     if ($null -ne $task) { Unregister-ScheduledTask -TaskName $context.Task -TaskPath '\' -Confirm:$false }
     if (Test-Path -LiteralPath $context.Install) {

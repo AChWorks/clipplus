@@ -1,5 +1,5 @@
-; The wizard owns uninstall registration and shortcuts. The existing protected
-; transactional activation script owns the installed application and task.
+; The wizard owns uninstall registration. The protected transactional
+; activation script owns the application, task and both shortcut paths.
 #ifndef PayloadDir
   #error PayloadDir must point at the prepared package directory
 #endif
@@ -25,6 +25,9 @@ DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
 UsePreviousAppDir=no
+UsePreviousTasks=no
+; Replace the old log so uninstall cannot delete a reused legacy common link.
+UninstallLogMode=overwrite
 UsePreviousLanguage=no
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible or arm64
@@ -48,29 +51,31 @@ MinVersion=10.0
 ChangesAssociations=no
 
 [Tasks]
-Name: "elevated"; Description: "Use administrator privileges for automatic startup (otherwise use normal account privileges)"; GroupDescription: "Startup options:"; Flags: checkedonce
+Name: "elevated"; Description: "Use administrator privileges for startup and Start Menu launches (otherwise use normal privileges)"; GroupDescription: "Startup privileges (Normal and Administrator histories are separate):"
 
 [Files]
 Source: "{#PayloadDir}\Setup.Common.ps1"; Flags: dontcopy
 Source: "{#PayloadDir}\Invoke-Setup.ps1"; Flags: dontcopy
 Source: "{#PayloadDir}\Install.ps1"; Flags: dontcopy
 Source: "{#PayloadDir}\Uninstall.ps1"; Flags: dontcopy
+Source: "{#PayloadDir}\UserShortcut.ps1"; Flags: dontcopy
 Source: "{#PayloadDir}\manifest.json"; Flags: dontcopy
 Source: "{#PayloadDir}\app\*"; DestDir: "{tmp}\app"; Flags: dontcopy recursesubdirs
 Source: "{#PayloadDir}\Setup.Common.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\Invoke-Setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\Uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
-
-[Icons]
-Name: "{commonprograms}\ClipPlus-{code:UserSid}"; Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn ""ClipPlus-{code:UserSid}"""; IconFilename: "{code:InstalledExe}"; Flags: runminimized
+Source: "{#PayloadDir}\UserShortcut.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]
 Type: files; Name: "{app}\setup-error.txt"
+; The overwritten log may not record creation of an existing registration directory.
+Type: dirifempty; Name: "{app}"
 
 [Code]
 var
   CurrentSid: String;
   TransactionPrepared, TransactionCommitted, CommitFailed: Boolean;
+  InitialHighest, TasksInitialized, ExplicitStartupTasks: Boolean;
 #ifdef FaultHarness
   CancelInjected: Boolean;
 
@@ -148,6 +153,9 @@ end;
 procedure InitializeWizard;
 var
   Error: String;
+  StateText, WarningText: AnsiString;
+  I: Integer;
+  Arg: String;
 begin
   ExtractTemporaryFile('Install.ps1');
   Error := RunAction(ExpandConstant('{tmp}'), 'Recover', '-ExpectedSid "' + CurrentSid + '"');
@@ -161,6 +169,32 @@ begin
     Abort;
   end;
 #endif
+  Error := RunAction(ExpandConstant('{tmp}'), 'StartupState', '-ExpectedSid "' + CurrentSid + '"');
+  if (Error <> '') or not LoadStringFromFile(ExpandConstant('{tmp}\startup-mode.txt'), StateText) then begin
+    SuppressibleMsgBox('Could not read the existing startup privileges. ' + Error, mbError, MB_OK, IDOK);
+    Abort;
+  end;
+  InitialHighest := Trim(String(StateText)) = 'Highest';
+  for I := 1 to ParamCount do begin
+    Arg := Uppercase(ParamStr(I));
+    if (Pos('/TASKS=', Arg) = 1) or (Pos('/MERGETASKS=', Arg) = 1) then
+      ExplicitStartupTasks := True;
+  end;
+  if LoadStringFromFile(ExpandConstant('{tmp}\startup-warning.txt'), WarningText) and (WarningText <> '') then begin
+    Log(String(WarningText));
+    if not WizardSilent then MsgBox(String(WarningText), mbInformation, MB_OK);
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpSelectTasks) and not TasksInitialized then begin
+    TasksInitialized := True;
+    if not ExplicitStartupTasks then begin
+      if InitialHighest then WizardSelectTasks('elevated')
+      else WizardSelectTasks('');
+    end;
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -169,10 +203,15 @@ var
 begin
   try
     ExtractTemporaryFile('Uninstall.ps1');
+    ExtractTemporaryFile('UserShortcut.ps1');
     ExtractTemporaryFile('manifest.json');
     ExtractTemporaryFiles('{tmp}\app\*');
     Options := '-ExpectedSid "' + CurrentSid + '"';
-    if not WizardIsTaskSelected('elevated') then Options := Options + ' -NormalStartup';
+    if ExplicitStartupTasks or (not WizardSilent and TasksInitialized and
+        (WizardIsTaskSelected('elevated') <> InitialHighest)) then begin
+      if WizardIsTaskSelected('elevated') then Options := Options + ' -StartupMode Highest'
+      else Options := Options + ' -StartupMode Limited';
+    end;
     Result := RunAction(ExpandConstant('{tmp}'), 'Install', Options);
     TransactionPrepared := Result = '';
   except

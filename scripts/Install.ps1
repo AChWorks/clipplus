@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Prepare','Commit','Rollback','Recover')][string]$Phase = 'Prepare',
-    [switch]$NormalStartup
+    [ValidateSet('Preserve','Highest','Limited')][string]$StartupMode = 'Preserve'
 )
 . (Join-Path $PSScriptRoot 'Setup.Common.ps1')
 
@@ -117,11 +117,33 @@ function Read-TransactionState($Context) {
     foreach ($field in @('hadApp','hadTask','wasRunning','hadRegistration','hadShortcut')) {
         if ($state.$field -isnot [bool]) { throw "Invalid setup transaction flag: $field" }
     }
+    if ($null -ne $state.PSObject.Properties['hadUserShortcut'] -and $state.hadUserShortcut -isnot [bool]) {
+        throw 'Invalid user shortcut transaction flag.'
+    }
+    if ($null -ne $state.PSObject.Properties['shortcutStageId'] -and
+        ($state.shortcutStageId -isnot [string] -or $state.shortcutStageId -cnotmatch '^[0-9a-f]{32}$' -or
+         $null -eq $state.PSObject.Properties['hadUserShortcut'])) {
+        throw 'Invalid shortcut staging transaction identity.'
+    }
     if ($state.hadApp -and ($state.previousExeHash -notmatch '^[a-fA-F0-9]{64}$' -or
         $state.previousMarkerHash -notmatch '^[a-fA-F0-9]{64}$')) {
         throw 'Invalid previous-package identity.'
     }
     return $state
+}
+
+# Generate the trusted shortcut bytes only inside the protected transaction.
+# The Limited helper alone publishes or removes files in the user's Programs.
+function New-UserShortcutSource($Context) {
+    $source = Join-Path $Context.Transaction 'user-shortcut.lnk'
+    if (Test-Path -LiteralPath $source) { throw 'Unexpected shortcut source collision.' }
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($source)
+    $link.TargetPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'schtasks.exe'
+    $link.Arguments = '/run /tn "' + $Context.Task + '"'
+    $link.IconLocation = $Context.Exe + ',0'
+    $link.WindowStyle = 7
+    $link.Description = 'Open ClipPlus'
+    $link.Save()
 }
 
 function Get-RegExe {
@@ -135,9 +157,10 @@ function Save-Registration($Context, $State) {
         & (Get-RegExe) export $Context.RegistrationKey (Join-Path $Context.Transaction 'registration.reg') /y | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not snapshot Installed Apps registration.' }
     }
-    Assert-NoReparsePoint $Context.Shortcut
+    Assert-NoReparsePoint $Context.LegacyShortcut
     if ($State.hadShortcut) {
-        Copy-Item -LiteralPath $Context.Shortcut -Destination (Join-Path $Context.Transaction 'ClipPlus.lnk')
+        if (-not (Test-OwnedLegacyShortcut $Context)) { throw 'Legacy shortcut ownership changed during preparation.' }
+        Copy-Item -LiteralPath $Context.LegacyShortcut -Destination (Join-Path $Context.Transaction 'ClipPlus.lnk')
     }
 }
 
@@ -158,16 +181,33 @@ function Restore-Registration($Context, $State) {
         & (Get-RegExe) import (Join-Path $Context.Transaction 'registration.reg') | Out-Null
         if ($LASTEXITCODE -ne 0 -or -not (Assert-Registration $Context)) { throw 'Could not restore Installed Apps registration.' }
     }
-    Assert-NoReparsePoint $Context.Shortcut
+    # New-format journals leave an already-owned user link unchanged. An
+    # old-format journal predates the user link and must not touch it.
+    if ($null -ne $State.PSObject.Properties['shortcutStageId']) {
+        $result = Invoke-UserShortcut $Context Rollback (Join-Path $Context.Transaction 'UserShortcut.ps1')
+        if ($result -eq 11) { Write-Warning 'Unrelated per-user shortcut or staging resource left unchanged.' }
+        elseif ($result -ne 0) { throw 'Could not roll back the per-user shortcut.' }
+    } elseif ($null -ne $State.PSObject.Properties['hadUserShortcut'] -and -not $State.hadUserShortcut) {
+        $result = Invoke-UserShortcut $Context Remove (Join-Path $Context.Transaction 'UserShortcut.ps1')
+        if ($result -notin @(0,11)) { throw 'Could not roll back the per-user shortcut.' }
+    }
+    $ownedLegacy = Test-OwnedLegacyShortcut $Context
     if ($State.hadShortcut) {
-        Copy-Item -LiteralPath (Join-Path $Context.Transaction 'ClipPlus.lnk') -Destination $Context.Shortcut -Force
-    } elseif (Test-Path -LiteralPath $Context.Shortcut) {
-        Remove-Item -LiteralPath $Context.Shortcut -Force
+        if ((Test-Path -LiteralPath $Context.LegacyShortcut) -and -not $ownedLegacy) {
+            throw 'Refusing to overwrite an unrelated legacy shortcut during rollback.'
+        }
+        Copy-Item -LiteralPath (Join-Path $Context.Transaction 'ClipPlus.lnk') -Destination $Context.LegacyShortcut -Force
+    } elseif ($ownedLegacy) {
+        # Only old wizards created a common link during installation.
+        if ($null -eq $State.PSObject.Properties['hadUserShortcut']) {
+            Remove-Item -LiteralPath $Context.LegacyShortcut -Force
+        }
     }
 }
 
 function Remove-Transaction($Context) {
     Assert-Tree $Context.Transaction
+    Remove-ShortcutHelperTask $Context
     $file = Join-Path $Context.Transaction 'state.json'
     foreach ($entry in @(Get-ChildItem -LiteralPath $Context.Transaction -Force)) {
         if ($entry.FullName -ine $file) {
@@ -204,6 +244,14 @@ function Assert-RecoverySnapshots($Context, $State) {
         (-not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'registration.reg') -PathType Leaf) -or
          -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'registration') -PathType Container))) {
         throw 'Previous Installed Apps snapshot is missing.'
+    }
+    if ($null -ne $State.PSObject.Properties['hadUserShortcut'] -and
+        -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'UserShortcut.ps1') -PathType Leaf)) {
+        throw 'Protected user shortcut helper snapshot is missing.'
+    }
+    if ($null -ne $State.PSObject.Properties['shortcutStageId'] -and
+        -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'user-shortcut.lnk') -PathType Leaf)) {
+        throw 'Protected shortcut source snapshot is missing.'
     }
     if ($State.hadShortcut -and -not (Test-Path -LiteralPath (Join-Path $Context.Transaction 'ClipPlus.lnk') -PathType Leaf)) {
         throw 'Previous shortcut snapshot is missing.'
@@ -254,6 +302,8 @@ function Undo-Activation($Context, $State) {
 function Undo-Transaction($Context, $State) {
     if ($State.phase -eq 'committed') { throw 'The setup transaction already committed.' }
     if ($State.phase -eq 'activating') {
+        # Quiesce publication before restoring app/task/shortcut resources.
+        Remove-ShortcutHelperTask $Context
         Undo-Activation $Context $State
         Restore-Registration $Context $State
         $State.phase = 'rolled-back'
@@ -317,7 +367,8 @@ try {
             Undo-Transaction $context $state
         } else {
             if ($state.phase -ne 'activating' -or -not (Assert-Registration $context) -or
-                $null -eq (Get-OwnedTask $context) -or -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf)) {
+                $null -eq (Get-OwnedTask $context) -or
+                (Invoke-UserShortcut $context Inspect (Join-Path $context.Transaction 'UserShortcut.ps1')) -ne 0) {
                 throw 'The complete installation has not been registered; cannot commit.'
             }
             Assert-OwnedInstall $context $context.Install
@@ -342,6 +393,15 @@ try {
     if ($hadApp) { Assert-OwnedInstall $context $context.Install }
     $previousTask = Get-OwnedTask $context
     $hadRegistration = Assert-Registration $context
+    $automatic = Get-StartupEnabled $previousTask
+    $level = if ($StartupMode -ne 'Preserve') { $StartupMode } elseif ($null -ne $previousTask) {
+        [string]$previousTask.Principal.RunLevel
+    } else { 'Highest' }
+    if ($level -notin @('Highest','Limited')) { throw 'Unsupported existing startup privilege.' }
+    $hadLegacyShortcut = Test-OwnedLegacyShortcut $context
+    if ((Test-Path -LiteralPath $context.LegacyShortcut) -and -not $hadLegacyShortcut) {
+        Write-Warning 'An unrelated common Programs shortcut will be left unchanged.'
+    }
     $state = [pscustomobject]@{
         product = 'AChWorks.ClipPlus'
         sid = $context.Sid
@@ -353,13 +413,22 @@ try {
         hadTask = $null -ne $previousTask
         wasRunning = $null -ne $previousTask -and $previousTask.State -eq 'Running'
         hadRegistration = $hadRegistration
-        hadShortcut = Test-Path -LiteralPath $context.Shortcut -PathType Leaf
+        hadShortcut = $hadLegacyShortcut
+        hadUserShortcut = $false
+        shortcutStageId = [Guid]::NewGuid().ToString('N')
     }
     New-Item -ItemType Directory -Path $context.Transaction | Out-Null
     $journalWritten = $false
     try {
         Write-TransactionState $context $state
         $journalWritten = $true
+        $helper = Join-Path $context.Transaction 'UserShortcut.ps1'
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'UserShortcut.ps1') -Destination $helper
+        $shortcutState = Invoke-UserShortcut $context Inspect $helper
+        if ($shortcutState -eq 11) { throw 'An unrelated per-user ClipPlus shortcut or staging path exists. Move or rename it before installing.' }
+        $state.hadUserShortcut = $shortcutState -eq 0
+        Write-TransactionState $context $state
+        New-UserShortcutSource $context
         Save-Registration $context $state
         if ($state.hadTask) {
             Export-ScheduledTask -TaskName $context.Task -TaskPath '\' |
@@ -385,8 +454,13 @@ try {
         Stop-ClipPlus $context
         if ($hadApp) { Move-Item -LiteralPath $context.Install -Destination (Join-Path $context.Transaction 'previous-app') }
         Move-Item -LiteralPath $stage -Destination $context.Install
-        Register-ClipPlusTask $context -NormalStartup:$NormalStartup
+        Register-ClipPlusTask $context -NormalStartup:($level -eq 'Limited') -AutomaticStartup $automatic
         Start-ClipPlusAndVerify $context
+        if ((Invoke-UserShortcut $context Create $helper) -ne 0) { throw 'Could not create the owned per-user Start Menu shortcut.' }
+        if ($state.hadShortcut) {
+            if (-not (Test-OwnedLegacyShortcut $context)) { throw 'Legacy shortcut ownership changed during installation.' }
+            Remove-Item -LiteralPath $context.LegacyShortcut -Force
+        }
         Write-Host 'Application activation verified; awaiting wizard commit.'
     } catch {
         $failure = $_

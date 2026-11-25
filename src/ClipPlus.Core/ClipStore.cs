@@ -134,7 +134,7 @@ public sealed class ClipStore : IDisposable
         var filter = string.IsNullOrWhiteSpace(query) ? view : null;
         var where = filter switch
         {
-            PinnedView => " WHERE pinned=1",
+            PinnedView => "",
             RecentView => " WHERE pinned=0",
             null => "",
             _ => " WHERE category_id=$view"

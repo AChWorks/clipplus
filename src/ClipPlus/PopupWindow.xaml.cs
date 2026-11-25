@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -26,22 +27,27 @@ public partial class PopupWindow : Window
     private readonly Func<Preferences> _preferences;
     private readonly Action<long, bool> _saveView;
     private readonly Dictionary<long, Row> _rows = new();
+    private ObservableCollection<HistoryEntry> _entries = new();
+    // Include visual metadata so renaming a category or switching compact
+    // view invalidates affected cards even when clip metadata is unchanged.
+    internal sealed record HistoryEntry(ClipItem Item, string? Heading, string? CategoryName, bool Compact);
     private readonly DispatcherTimer _paletteTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private Row? _openPalette;
     private Row? _editingRow;
     private TextBox? _titleEditor;
-    private bool _placing, _refreshing, _refreshPending, _dark;
+    private bool _placing, _refreshing, _refreshPending, _dark, _highContrast, _themeApplied;
     private bool _reconcileRequested, _reconcileQueued;
     private bool _inMoveSize, _userMoving, _userSizing;
     private Native.Rect _moveStart;
     private Native.Point? _keyboardCursor;
 
-    private sealed class Row(ClipItem item, ListBoxItem container, Button title, Grid titleHost,
+    private sealed class Row(HistoryEntry entry, ListBoxItem container, Button title, Grid titleHost,
         Border accent, Button swatch, Ellipse swatchDot, Border palette, UniformGrid choices, Image? image,
         Button categoryButton, Border categoryPicker, WrapPanel categoryChoices)
     {
-        internal ClipItem Item = item;
+        internal readonly HistoryEntry Entry = entry;
+        internal ClipItem Item => Entry.Item;
         internal readonly ListBoxItem Container = container;
         internal readonly Button Title = title;
         internal readonly Grid TitleHost = titleHost;
@@ -69,6 +75,17 @@ public partial class PopupWindow : Window
         InitializeComponent();
         ApplyTheme();
         InitializeCategories();
+        ClipList.PrepareRow = (container, item) =>
+        {
+            ReleaseRow(container);
+            var entry = (HistoryEntry)item;
+            var row = BuildRow(entry, container);
+            _rows[entry.Item.Id] = row;
+            container.Tag = row;
+            if (Equals(ClipList.SelectedItem, entry)) LoadPreview(row);
+        };
+        ClipList.ReleaseRow = ReleaseRow;
+        ClipList.ItemsSource = _entries;
 
         DragHeader.MouseLeftButtonDown += (_, e) =>
         {
@@ -160,7 +177,8 @@ public partial class PopupWindow : Window
         _placing = true;
         try
         {
-            ApplyTheme();
+            if (ApplyTheme())
+                foreach (var row in _rows.Values) SetColorVisual(row);
             _keyboardCursor = null;
             SearchBox.Text = "";
             ClosePalette(false);
@@ -326,8 +344,41 @@ public partial class PopupWindow : Window
         catch (Exception ex) { _report("ClipPlus could not complete the requested action.", ex); }
     }
 
-    private Row? Selected => ClipList.SelectedItem is ListBoxItem container && container.Tag is long id &&
-        _rows.TryGetValue(id, out var row) ? row : null;
+    private HistoryEntry? Selected => ClipList.SelectedItem as HistoryEntry;
+
+    private void ReleaseRow(ListBoxItem container)
+    {
+        if (container.Tag is not Row row) return;
+        if (_editingRow == row) EndTitle(false, false);
+        if (_openPalette == row) ClosePalette(false);
+        if (_openCategoryRow == row) CloseCategoryPicker(false);
+        if (_rows.TryGetValue(row.Item.Id, out var current) && current == row)
+            _rows.Remove(row.Item.Id);
+        container.Tag = null;
+        container.Content = null;
+        if (_refreshPending && !_refreshing) RequestInteractionReconciliation();
+    }
+
+    private void UpdateEntries(IReadOnlyList<HistoryEntry> next)
+    {
+        // Do nothing for identical views; update a single changed card or
+        // insertion/removal in place. A different filter/order uses a fresh
+        // data source, not a prebuilt collection of visual containers.
+        int prefix = 0, suffix = 0;
+        while (prefix < _entries.Count && prefix < next.Count && _entries[prefix] == next[prefix]) prefix++;
+        if (prefix == _entries.Count && prefix == next.Count) return;
+        while (suffix < _entries.Count - prefix && suffix < next.Count - prefix &&
+            _entries[_entries.Count - 1 - suffix] == next[next.Count - 1 - suffix]) suffix++;
+        int removed = _entries.Count - prefix - suffix, added = next.Count - prefix - suffix;
+        if (removed == 1 && added == 1) _entries[prefix] = next[prefix];
+        else if (removed == 0 && added == 1) _entries.Insert(prefix, next[prefix]);
+        else if (removed == 1 && added == 0) _entries.RemoveAt(prefix);
+        else
+        {
+            _entries = new ObservableCollection<HistoryEntry>(next);
+            ClipList.ItemsSource = _entries;
+        }
+    }
 
     private void Refresh(bool preserveSelection = true)
     {
@@ -343,8 +394,7 @@ public partial class PopupWindow : Window
             var available = _store.AvailableViews();
             SyncCategoryBar(available.Pinned);
             var items = _store.List(SearchBox.Text, _activeView);
-            ClipList.Items.Clear();
-            _rows.Clear();
+            var next = new List<HistoryEntry>(items.Count);
             string? previousGroup = null;
             var searching = !string.IsNullOrWhiteSpace(SearchBox.Text);
             foreach (var item in items)
@@ -352,26 +402,29 @@ public partial class PopupWindow : Window
                 var group = searching
                     ? (item.TitleMatches(SearchBox.Text) ? "Title matches" : "Content matches")
                     : _activeView > 0 ? (item.Pinned ? "Pinned" : "Recent") : null;
-                var row = BuildRow(item, previousGroup != group ? group : null);
+                next.Add(new HistoryEntry(item, previousGroup != group ? group : null,
+                    _categories.FirstOrDefault(c => c.Id == item.CategoryId)?.Name,
+                    _compact && item.Title.Length > 0));
                 previousGroup = group;
-                _rows.Add(item.Id, row);
-                ClipList.Items.Add(row.Container);
             }
+            UpdateEntries(next);
             EmptyLabel.Text = searching ? "No matching clips." :
                 _activeView > 0 ? "No clips in this category." : "Nothing copied yet.";
             EmptyLabel.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             ClearButton.IsEnabled = available.Recent;
-            if (previous is long id && _rows.TryGetValue(id, out var selected))
-                ClipList.SelectedItem = selected.Container;
-            else if (items.Count > 0)
-                ClipList.SelectedIndex = 0;
+            var selected = previous is long id ? _entries.FirstOrDefault(entry => entry.Item.Id == id) : null;
+            ClipList.SelectedItem = selected ?? _entries.FirstOrDefault();
+            if (!preserveSelection && ClipList.SelectedItem is not null)
+                ClipList.ScrollIntoView(ClipList.SelectedItem);
         }
         finally { _refreshing = false; _refreshPending = false; }
         PreviewSelected();
     }
 
-    private Row BuildRow(ClipItem item, string? groupHeading)
+    private Row BuildRow(HistoryEntry entry, ListBoxItem container)
     {
+        var item = entry.Item;
+        var groupHeading = entry.Heading;
         var outer = new StackPanel();
         if (groupHeading is not null)
         {
@@ -397,7 +450,7 @@ public partial class PopupWindow : Window
         Grid.SetColumn(content, 1);
         panel.Children.Add(content);
 
-        var compact = _compact && item.Title.Length > 0;
+        var compact = entry.Compact;
         var header = new Grid { Margin = compact ? new Thickness(0) : new Thickness(0, 0, 0, 4) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         for (var i = 0; i < (compact ? 5 : 3); i++) header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -473,9 +526,9 @@ public partial class PopupWindow : Window
         categoryPicker.SetResourceReference(BackgroundProperty, "FieldBrush");
         content.Children.Add(categoryPicker);
 
-        var container = new ListBoxItem { Content = outer, Tag = item.Id };
+        container.Content = outer;
         AutomationProperties.SetName(container, $"{item.DisplayTitle}{(item.Pinned ? ", pinned" : "")}");
-        var row = new Row(item, container, title, titleHost, accent, swatch, swatchDot, palette, choices, image, categoryButton, categoryPicker, categoryChoices);
+        var row = new Row(entry, container, title, titleHost, accent, swatch, swatchDot, palette, choices, image, categoryButton, categoryPicker, categoryChoices);
         categoryButton.Click += (_, _) => Run(() => ToggleCategoryPicker(row));
         categoryPicker.LostKeyboardFocus += (_, _) => RequestInteractionReconciliation();
         categoryButton.LostKeyboardFocus += (_, _) =>
@@ -509,7 +562,7 @@ public partial class PopupWindow : Window
             OpenPalette(row);
             if (choices.Children.Count > 0 && choices.Children[0] is Button first) first.Focus();
         };
-        container.MouseMove += (_, _) =>
+        outer.MouseMove += (_, _) =>
         {
             // WPF can raise mouse movement during layout/scrolling even
             // with a stationary pointer. Do not let it undo keyboard
@@ -521,14 +574,14 @@ public partial class PopupWindow : Window
             }
             if (_editingRow is null && _categoryEditor is null &&
                 (_openCategoryRow is null || _openCategoryRow == row) && (_openPalette is null || _openPalette == row))
-                ClipList.SelectedItem = container;
+                ClipList.SelectedItem = entry;
         };
         if (previewPanel is not null)
         {
             previewPanel.MouseLeftButtonUp += async (_, e) =>
             {
                 e.Handled = true;
-                ClipList.SelectedItem = container;
+                ClipList.SelectedItem = entry;
                 await _paste(item.Id);
             };
             previewPanel.Cursor = Cursors.Hand;
@@ -581,7 +634,7 @@ public partial class PopupWindow : Window
         ClosePalette(false);
         CloseCategoryPicker(false);
         EndCategoryEdit();
-        ClipList.SelectedItem = row.Container;
+        ClipList.SelectedItem = row.Entry;
         var editor = new TextBox
         {
             Text = row.Item.Title, FontSize = 12, Padding = new Thickness(3, 1, 3, 1), MinHeight = 26
@@ -610,8 +663,6 @@ public partial class PopupWindow : Window
             {
                 var title = editor.Text.Trim();
                 _store.SetTitle(row.Item.Id, title);
-                row.Item = row.Item with { Title = title };
-                SetTitleVisual(row);
             }
         }
         finally
@@ -621,7 +672,7 @@ public partial class PopupWindow : Window
         }
         if (processPending)
         {
-            if (save && (_compact || SearchBox.Text.Length > 0)) Refresh();
+            if (save) Refresh();
             else FlushPendingHistory();
         }
     }
@@ -632,7 +683,7 @@ public partial class PopupWindow : Window
         ClosePalette(false);
         CloseCategoryPicker(false);
         EndCategoryEdit();
-        ClipList.SelectedItem = row.Container;
+        ClipList.SelectedItem = row.Entry;
         _openPalette = row;
         BuildPalette(row);
         row.Palette.Visibility = Visibility.Visible;
@@ -662,9 +713,8 @@ public partial class PopupWindow : Window
             button.Click += (_, _) => Run(() =>
             {
                 _store.SetColor(row.Item.Id, color);
-                row.Item = row.Item with { Color = color };
-                SetColorVisual(row);
-                ClosePalette();
+                ClosePalette(false);
+                Refresh();
                 FocusSearch();
             });
             row.Choices.Children.Add(button);
@@ -746,8 +796,14 @@ public partial class PopupWindow : Window
 
     private void PreviewSelected()
     {
-        if (_refreshing || Selected is not { } row || !row.Item.HasImage || row.PreviewAttempted ||
-            row.Image is not { } preview) return;
+        if (_refreshing || Selected is not { } selected ||
+            !_rows.TryGetValue(selected.Item.Id, out var row)) return;
+        LoadPreview(row);
+    }
+
+    private void LoadPreview(Row row)
+    {
+        if (!row.Item.HasImage || row.PreviewAttempted || row.Image is not { } preview) return;
         row.PreviewAttempted = true;
         try
         {
@@ -801,7 +857,7 @@ public partial class PopupWindow : Window
         return brush;
     }
 
-    private void ApplyTheme()
+    private bool ApplyTheme()
     {
         var dark = false;
         try
@@ -810,14 +866,21 @@ public partial class PopupWindow : Window
                 "AppsUseLightTheme", 1) is int value && value == 0;
         }
         catch (System.Security.SecurityException) { }
+        var highContrast = SystemParameters.HighContrast;
+        if (_themeApplied && _dark == dark && !_highContrast && !highContrast) return false;
+        _themeApplied = true;
         _dark = dark;
+        _highContrast = highContrast;
         void Set(string name, string light, string night) => Resources[name] = BrushFrom(dark ? night : light);
-        if (SystemParameters.HighContrast)
+        if (highContrast)
         {
             Resources["PanelBrush"] = SystemColors.WindowBrush;
             Resources["FieldBrush"] = SystemColors.WindowBrush;
             Resources["CardBrush"] = SystemColors.WindowBrush;
             Resources["SelectedBrush"] = SystemColors.WindowBrush;
+            Resources["CategorySelectedBrush"] = SystemColors.HighlightBrush;
+            Resources["CategorySelectedTextBrush"] = SystemColors.HighlightTextBrush;
+            Resources["CategorySelectedFocusBrush"] = SystemColors.HighlightTextBrush;
             Resources["HoverBrush"] = SystemColors.ControlBrush;
             Resources["TextBrush"] = SystemColors.WindowTextBrush;
             Resources["MutedBrush"] = SystemColors.WindowTextBrush;
@@ -828,13 +891,16 @@ public partial class PopupWindow : Window
             Resources["ScrollRailBrush"] = SystemColors.ControlBrush;
             Resources["ScrollIndicatorWidth"] = 8.0;
             Resources["ScrollIndicatorActiveWidth"] = 8.0;
-            return;
+            return true;
         }
         Set("PanelBrush", "#F5F5F5", "#202020");
         Set("FieldBrush", "#FFFFFF", "#303030");
         Set("CardBrush", "#FFFFFF", "#2B2B2B");
         Set("SelectedBrush", "#EAF2FF", "#363E4A");
         Set("HoverBrush", "#E8E8E8", "#414141");
+        Set("CategorySelectedBrush", "#DDDDDD", "#484848");
+        Set("CategorySelectedTextBrush", "#1D1D1D", "#F4F4F4");
+        Set("CategorySelectedFocusBrush", "#2562A8", "#9BC9FF");
         Set("TextBrush", "#1D1D1D", "#F4F4F4");
         Set("MutedBrush", "#595959", "#BBBBBB");
         Set("BorderBrush", "#D3D3D3", "#414141");
@@ -844,5 +910,6 @@ public partial class PopupWindow : Window
         Set("ScrollRailBrush", "#E1E1E1", "#393939");
         Resources["ScrollIndicatorWidth"] = 3.0;
         Resources["ScrollIndicatorActiveWidth"] = 6.0;
+        return true;
     }
 }
