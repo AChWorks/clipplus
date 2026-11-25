@@ -28,6 +28,7 @@ public partial class PopupWindow : Window
     private readonly Action<long, bool> _saveView;
     private readonly Func<long, Native.PasteTarget?, Task<bool>>? _quickPaste;
     private readonly Action<QuickGeometry>? _saveQuickGeometry;
+    private readonly HwndSourceHook _windowHook;
     private readonly Dictionary<long, Row> _rows = new();
     private ObservableCollection<HistoryEntry> _entries = new();
     // Include visual metadata so renaming a category or switching compact
@@ -77,6 +78,8 @@ public partial class PopupWindow : Window
         _saveView = saveView;
         _quickPaste = quickPaste;
         _saveQuickGeometry = saveQuickGeometry;
+        // Keep the hook rooted for the entire HWND lifetime.
+        _windowHook = OnWindowMessage;
         InitializeComponent();
         ApplyTheme();
         InitializeCategories();
@@ -116,6 +119,7 @@ public partial class PopupWindow : Window
             Refresh();
             FocusSearch();
         });
+        SearchBox.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler(OnQuickSearchMouseDown), true);
         SearchBox.TextChanged += (_, _) =>
         {
             SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -145,7 +149,7 @@ public partial class PopupWindow : Window
             }
         };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusLabel.Visibility = Visibility.Collapsed; };
-        SourceInitialized += (_, _) => HwndSource.FromHwnd(Handle)?.AddHook(OnWindowMessage);
+        SourceInitialized += (_, _) => HwndSource.FromHwnd(Handle)?.AddHook(_windowHook);
     }
 
     internal nint Handle => new WindowInteropHelper(this).Handle;
@@ -154,18 +158,19 @@ public partial class PopupWindow : Window
     {
         if (IsQuickMode && message == 0x0021) // WM_MOUSEACTIVATE
         {
+            // Deliver the mouse gesture without activating. The search box
+            // explicitly activates on its own pointer-down, after capturing
+            // the still-active external window.
             handled = true;
-            // Only explicit search interaction activates the quick panel.
-            if (((long)lParam & 0xffff) == 1 && Native.GetCursorPos(out var pointer))
-            {
-                var point = SearchBox.PointFromScreen(new Point(pointer.X, pointer.Y));
-                if (new Rect(0, 0, SearchBox.ActualWidth, SearchBox.ActualHeight).Contains(point))
-                {
-                    _searchTarget = Native.ExternalTarget(Native.GetForegroundWindow());
-                    return 1; // MA_ACTIVATE
-                }
-            }
-            return 3; // MA_NOACTIVATE (deliver the click)
+            return 3; // MA_NOACTIVATE
+        }
+        if (IsQuickMode && message == 0x0006 && ((long)wParam & 0xffff) != 0) // WM_ACTIVATE
+        {
+            // Windows supplies the deactivated HWND in lParam. Unlike
+            // GetForegroundWindow during activation, it identifies the
+            // window displaced by this activation. Retain a pre-click
+            // capture only when Windows supplies no external HWND.
+            _searchTarget = Native.ExternalTarget(lParam) ?? _searchTarget;
         }
         if (message == 0x0231) // WM_ENTERSIZEMOVE
         {

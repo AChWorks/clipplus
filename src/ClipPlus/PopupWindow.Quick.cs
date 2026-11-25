@@ -20,6 +20,19 @@ public partial class PopupWindow
     private Native.Point _normalOrigin;
     private bool _quickPasting;
 
+    private void OnQuickSearchMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!IsQuickMode || e.ChangedButton != MouseButton.Left) return;
+        var hwnd = Handle;
+        var foreground = Native.GetForegroundWindow();
+        if (foreground == hwnd) return;
+        _searchTarget = Native.ExternalTarget(foreground);
+        Activate();
+        if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
+        if (Native.GetForegroundWindow() == hwnd) FocusSearch();
+        else _searchTarget = null;
+    }
+
     private void SetQuickAppearance(bool quick)
     {
         IsQuickMode = quick;
