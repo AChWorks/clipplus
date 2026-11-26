@@ -50,7 +50,7 @@ internal static partial class Program
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var target = new Window { Title = "ClipPlus isolated raw input probe", Width = 480, Height = 280,
             WindowStartupLocation = WindowStartupLocation.CenterScreen, Content = new Grid(), ShowInTaskbar = false };
-        var sink = nint.Zero;
+        nint sink = 0;
         var registered = false;
         var headerSize = (uint)Marshal.SizeOf<ProbeRawHeader>();
         var deviceSize = (uint)Marshal.SizeOf<ProbeRawDevice>();
@@ -63,7 +63,7 @@ internal static partial class Program
             var hwnd = new WindowInteropHelper(target).Handle;
             Check(Native.GetWindowRect(hwnd, out var rect), "probe target bounds");
             Check(Native.SetForegroundWindow(hwnd) || Native.GetForegroundWindow() == hwnd, "probe target foreground");
-            sink = CreateWindowExW(0, "STATIC", "ClipPlus raw input probe", 0, 0, 0, 0, 0, new nint(-3), 0, 0, 0);
+            sink = CreateWindowExW(0, "STATIC", "ClipPlus raw input probe", 0, 0, 0, 0, 0, (nint)(-3), 0, 0, 0);
             if (sink == 0) throw Native.Error("CreateWindowEx raw input probe");
             if (!RegisterRawInputDevices(new[] { new ProbeRawDevice { Page = 1, Usage = 2, Flags = 0x100, Target = sink } }, 1, deviceSize))
                 throw Native.Error("RegisterRawInputDevices probe");
@@ -102,7 +102,7 @@ internal static partial class Program
                     var flags = unchecked((ushort)Marshal.ReadInt16(packet, (int)headerSize + 4));
                     if ((flags & 0x03ff) == 0) continue;
                     buttons.Add((flags, message.Point));
-                    Console.WriteLine($"PROBE button flags=0x{flags:x4} queued={message.Point.X},{message.Point.Y} device={(Marshal.ReadIntPtr(packet, 8) == 0 ? "null" : "present")}");
+                    Console.WriteLine($"PROBE button flags=0x{flags:x4} queued={message.Point.X},{message.Point.Y} device={(Marshal.ReadIntPtr(packet, 8) == IntPtr.Zero ? "null" : "present")}");
                 }
                 finally { DefWindowProcW(sink, message.Id, message.WParam, message.LParam); }
             }
