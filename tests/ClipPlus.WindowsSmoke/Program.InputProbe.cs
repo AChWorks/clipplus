@@ -9,52 +9,44 @@ using ClipPlus;
 
 internal static partial class Program
 {
-    // Isolated diagnostic only. Establish whether the documented MSG.pt
-    // snapshot on WM_INPUT is usable for deferred button classification
-    // and whether synthetic SendInput actually produces WM_INPUT here.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProbeRawDevice
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetRegisteredRawInputDevices([Out] Native.RawInputDevice[]? devices,
+        ref uint count, uint size);
+
+    private static nint RegisteredMouseSink()
     {
-        internal ushort Page, Usage;
-        internal uint Flags;
-        internal nint Target;
+        uint count = 0;
+        var size = (uint)Marshal.SizeOf<Native.RawInputDevice>();
+        if (GetRegisteredRawInputDevices(null, ref count, size) == uint.MaxValue)
+            throw Native.Error("Query raw input registrations");
+        if (count == 0) return 0;
+        var devices = new Native.RawInputDevice[count];
+        var read = GetRegisteredRawInputDevices(devices, ref count, size);
+        if (read == uint.MaxValue) throw Native.Error("Read raw input registrations");
+        var mouse = devices.Take((int)read).Where(d => d.Page == 1 && d.Usage == 2).ToArray();
+        Check(mouse.Length <= 1, "at most one process-local mouse input registration");
+        if (mouse.Length == 0) return 0;
+        Check(mouse[0].Target != 0 && (mouse[0].Flags & Native.RidevInputSink) != 0,
+            "registered mouse input has a background sink");
+        return mouse[0].Target;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProbeRawHeader
+    private static void VerifyQueuedRawInputCoordinates()
     {
-        internal uint Type, Size;
-        internal nint Device, WParam;
-    }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint CreateWindowExW(uint exStyle, string className, string windowName,
-        uint style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint param);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DestroyWindow(nint window);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool RegisterRawInputDevices([In] ProbeRawDevice[] devices, uint count, uint size);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern uint GetRawInputData(nint input, uint command, nint data, ref uint size, uint headerSize);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern nint DefWindowProcW(nint window, uint message, nuint wParam, nint lParam);
-
-    private static int OutsideInputProbe()
-    {
-        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        Check(Marshal.SizeOf<Native.RawInputDevice>() == (IntPtr.Size == 8 ? 16 : 12) &&
+            Marshal.SizeOf<Native.RawInputHeader>() == (IntPtr.Size == 8 ? 24 : 16) &&
+            Marshal.SizeOf<Native.RawMouse>() == 24 &&
+            Marshal.OffsetOf<Native.RawMouse>(nameof(Native.RawMouse.ButtonFlags)).ToInt32() == 4 &&
+            Marshal.SizeOf<Native.RawMouseInput>() == (IntPtr.Size == 8 ? 48 : 40),
+            "native raw mouse structure sizes and button union alignment");
+        Check(RegisteredMouseSink() == 0, "no competing raw mouse registration before outside observer");
         var target = new Window { Title = "ClipPlus isolated raw input probe", Width = 480, Height = 280,
             WindowStartupLocation = WindowStartupLocation.CenterScreen, Content = new Grid(), ShowInTaskbar = false };
         nint sink = 0;
         var registered = false;
-        var headerSize = (uint)Marshal.SizeOf<ProbeRawHeader>();
-        var deviceSize = (uint)Marshal.SizeOf<ProbeRawDevice>();
-        var packet = Marshal.AllocHGlobal((int)headerSize + 24);
+        var headerSize = (uint)Marshal.SizeOf<Native.RawInputHeader>();
+        var deviceSize = (uint)Marshal.SizeOf<Native.RawInputDevice>();
+        var packetSize = (uint)Marshal.SizeOf<Native.RawMouseInput>();
         try
         {
             target.Show();
@@ -63,16 +55,20 @@ internal static partial class Program
             var hwnd = new WindowInteropHelper(target).Handle;
             Check(Native.GetWindowRect(hwnd, out var rect), "probe target bounds");
             Check(Native.SetForegroundWindow(hwnd) || Native.GetForegroundWindow() == hwnd, "probe target foreground");
-            sink = CreateWindowExW(0, "STATIC", "ClipPlus raw input probe", 0, 0, 0, 0, 0, (nint)(-3), 0, 0, 0);
+            sink = Native.CreateWindowExW(0, "STATIC", "ClipPlus raw input probe", 0, 0, 0, 0, 0, (nint)(-3), 0, 0, 0);
             if (sink == 0) throw Native.Error("CreateWindowEx raw input probe");
-            if (!RegisterRawInputDevices(new[] { new ProbeRawDevice { Page = 1, Usage = 2, Flags = 0x100, Target = sink } }, 1, deviceSize))
+            if (!Native.RegisterRawInputDevices(new[] { new Native.RawInputDevice { Page = 1, Usage = 2,
+                    Flags = Native.RidevInputSink, Target = sink } }, 1, deviceSize))
                 throw Native.Error("RegisterRawInputDevices probe");
             registered = true;
+            Check(RegisteredMouseSink() == sink, "native message-only sink owns the probe registration");
+
             var first = new Native.Point { X = rect.Left + 70, Y = rect.Top + 100 };
             var second = new Native.Point { X = rect.Right - 70, Y = rect.Top + 100 };
             var final = new Native.Point { X = rect.Left + 70, Y = rect.Bottom - 70 };
-            // Native coordinates deliberately differ from the final cursor.
-            // Do not pump the receiver between synthetic button events.
+            // The receiver deliberately does not pump between button
+            // events. The final pointer position is different from both
+            // queued gestures, so sampling GetCursorPos would be wrong.
             void Inject(Native.Point point)
             {
                 Check(Native.SetCursorPos(point.X, point.Y), "probe cursor position");
@@ -82,46 +78,47 @@ internal static partial class Program
                 InstalledFlow.SendMouse(0x0004);
                 Thread.Sleep(80);
             }
-            // Let the idle state exceed the documented maximum low-level
-            // hook timeout; the raw registration remains unchanged.
             InstalledFlow.Pump(TimeSpan.FromSeconds(6));
             Inject(first);
             Inject(second);
             Check(Native.SetCursorPos(final.X, final.Y), "move cursor after queued clicks");
             Thread.Sleep(100);
-            Console.WriteLine($"PROBE expected first={first.X},{first.Y} second={second.X},{second.Y} final={final.X},{final.Y}");
+
             var buttons = new List<(ushort Flags, Native.Point Point)>();
-            while (Native.PeekMessage(out var message, sink, 0x00FF, 0x00FF, 1))
+            while (Native.PeekMessage(out var message, sink, Native.WmInput, Native.WmInput, 1))
             {
-                uint bytes = headerSize + 24;
+                var size = packetSize;
                 try
                 {
-                    var read = GetRawInputData(message.LParam, 0x10000003, packet, ref bytes, headerSize);
+                    var read = Native.GetRawInputData(message.LParam, Native.RidInput, out var input, ref size, headerSize);
                     if (read == uint.MaxValue) throw Native.Error("GetRawInputData probe");
-                    if (read != headerSize + 24 || Marshal.ReadInt32(packet) != 0) continue;
-                    var flags = unchecked((ushort)Marshal.ReadInt16(packet, (int)headerSize + 4));
-                    if ((flags & 0x03ff) == 0) continue;
-                    buttons.Add((flags, message.Point));
-                    Console.WriteLine($"PROBE button flags=0x{flags:x4} queued={message.Point.X},{message.Point.Y} device={(Marshal.ReadIntPtr(packet, 8) == IntPtr.Zero ? "null" : "present")}");
+                    if (read != packetSize || input.Header.Type != 0) continue;
+                    var flags = input.Mouse.ButtonFlags;
+                    if ((flags & 0x03ff) != 0) buttons.Add((flags, message.Point));
                 }
-                finally { DefWindowProcW(sink, message.Id, message.WParam, message.LParam); }
+                finally { Native.DefWindowProcW(sink, message.Id, message.WParam, message.LParam); }
             }
-            var correct = buttons.Count == 4 &&
+            Check(buttons.Count == 4 &&
                 buttons[0].Flags == 1 && buttons[1].Flags == 2 &&
                 buttons[2].Flags == 1 && buttons[3].Flags == 2 &&
                 buttons.Take(2).All(b => b.Point.X == first.X && b.Point.Y == first.Y) &&
-                buttons.Skip(2).All(b => b.Point.X == second.X && b.Point.Y == second.Y);
-            Console.WriteLine($"PROBE result count={buttons.Count} accurate-queued-coordinates={correct}");
-            return correct ? 0 : 1;
+                buttons.Skip(2).All(b => b.Point.X == second.X && b.Point.Y == second.Y),
+                "Raw Input retains exact queued synthetic click coordinates after idle and later cursor movement");
         }
         finally
         {
-            if (registered && !RegisterRawInputDevices(new[] { new ProbeRawDevice { Page = 1, Usage = 2, Flags = 1 } }, 1, deviceSize))
-                Console.Error.WriteLine("Probe unregister failed: " + Marshal.GetLastWin32Error());
-            if (sink != 0) DestroyWindow(sink);
-            Marshal.FreeHGlobal(packet);
-            target.Close();
-            app.Shutdown();
+            try
+            {
+                if (registered && !Native.RegisterRawInputDevices(new[] { new Native.RawInputDevice { Page = 1, Usage = 2,
+                        Flags = Native.RidevRemove } }, 1, deviceSize))
+                    throw Native.Error("UnregisterRawInputDevices probe");
+            }
+            finally
+            {
+                if (sink != 0) Native.DestroyWindow(sink);
+                target.Close();
+            }
         }
+        Check(RegisteredMouseSink() == 0, "probe registration removed before product interaction");
     }
 }

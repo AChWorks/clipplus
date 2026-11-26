@@ -41,7 +41,6 @@ internal static partial class Program
 
         if (args.Contains("--seed-v020-profile") || args.Contains("--snapshot-v020-profile")) return ProfileFixture(args);
         if (args.Contains("--popup-benchmark")) return PopupBenchmark();
-        if (args.Contains("--outside-input-probe")) return OutsideInputProbe();
 
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         using var first = new HwndSource(new HwndSourceParameters("ClipPlus smoke sender") { WindowStyle = 0 });
@@ -331,6 +330,7 @@ internal static partial class Program
             VerifyAppearance(popup, store);
             popup.HidePopup();
             popup.Close();
+            VerifyQueuedRawInputCoordinates();
             VerifyQuickVisual();
             VerifyWidthAndHover();
             Console.WriteLine("Windows smoke checks completed; physical hotkey, interactive paste, elevation, resize and lifecycle still require desktop acceptance.");

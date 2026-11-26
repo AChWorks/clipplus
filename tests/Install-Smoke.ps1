@@ -8,7 +8,8 @@ param([Parameter(Mandatory)][string]$Setup,[Parameter(Mandatory)][string]$Portab
       [Parameter(Mandatory)][string]$QuickSetup,
       [Parameter(Mandatory)][string]$WidthSetup,
       [Parameter(Mandatory)][string]$FloatingSetup,
-      [Parameter(Mandatory)][string]$GlassSetup)
+      [Parameter(Mandatory)][string]$GlassSetup,
+      [Parameter(Mandatory)][string]$ResizeSetup)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -55,6 +56,11 @@ $glassFile = (Get-Item -LiteralPath $GlassSetup).FullName
 $glassExeHash = 'AF5A44BE3E6E415495794E9E9761087B87ACC4FA6FB1FF51085B1D43E3B6B306'
 if ((Get-FileHash -LiteralPath $glassFile -Algorithm SHA256).Hash -ne 'D9B8352A02B7272A3C62451B63B0AC17B5BAD3976796A428557F79E6AE723C86') {
     throw 'Released v0.2.5 installer checksum mismatch.'
+}
+$resizeFile = (Get-Item -LiteralPath $ResizeSetup).FullName
+$resizeExeHash = 'D30AC22B0B29E963EA12E827221DC963C4CD1FF87FE6F32FD2543D2C64431C95'
+if ((Get-FileHash -LiteralPath $resizeFile -Algorithm SHA256).Hash -ne 'D77ADEF502957E67D486DCDC6D8D7D97C6EA11D29F3140F844E1F07CAB553877') {
+    throw 'Released v0.2.6 installer checksum mismatch.'
 }
 $legacySetupHash = '587266B81DB63244C54DE969832B59C02BE18FD83D4CBC6335D9530E89408D83'
 $legacyExeHash = '36C6BCB7EFDE4E50BA6E5D489781C5B24223F9A0B9DC4B632E32F21C304416C0'
@@ -961,7 +967,8 @@ try {
         @{Version='v0.2.2'; Setup=$quickFile; ExeHash=$quickExeHash; Geometry='quick'},
         @{Version='v0.2.3'; Setup=$widthFile; ExeHash=$widthExeHash; Geometry='width'},
         @{Version='v0.2.4'; Setup=$floatingFile; ExeHash=$floatingExeHash; Geometry='floating'},
-        @{Version='v0.2.5'; Setup=$glassFile; ExeHash=$glassExeHash; Geometry='floating'}
+        @{Version='v0.2.5'; Setup=$glassFile; ExeHash=$glassExeHash; Geometry='floating'},
+        @{Version='v0.2.6'; Setup=$resizeFile; ExeHash=$resizeExeHash; Geometry='floating'}
     )) {
         & $testExe --isolated-desktop --empty-fixture-clipboard
         if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }

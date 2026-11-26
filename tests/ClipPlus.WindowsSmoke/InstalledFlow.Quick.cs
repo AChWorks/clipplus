@@ -302,10 +302,19 @@ internal static partial class InstalledFlow
                 Native.GetForegroundWindow() == otherHwnd && QuickFind(popup, "Paste: " + title) is not null,
                 "icon click opens pinned panel without activating it");
             VerifyFloatingBounds(popup, iconAnchor, Preferences.Load(settings).QuickPanel);
+            // Leave the actual installed/portable panel untouched. Idle
+            // alone must not collapse it, and the first outside gesture
+            // still has to work without Resize, activation or another click.
+            Pump(TimeSpan.FromSeconds(8));
+            if (!IsWindowVisible(popup) || VisibleIcon(popup) != 0 ||
+                Native.GetForegroundWindow() != otherHwnd)
+                throw new InvalidOperationException("Idle changed expanded quick session or foreground.");
+            Console.WriteLine("PASS: expanded quick panel remains open through 8s idle");
             // Click the already-foreground application. No Deactivated
             // event can distinguish this case; the gesture must still work.
             FocusOther();
             icon = RequireCollapsed(popup, otherHwnd);
+            Console.WriteLine("PASS: first outside click collapses actual quick panel after idle");
             var returned = Bounds(icon);
             if (returned.Left != dragged.Left || returned.Top != dragged.Top)
                 throw new InvalidOperationException("Automatic clamping moved the stored icon anchor.");

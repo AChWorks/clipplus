@@ -80,7 +80,7 @@ internal static class Native
     internal static extern nint GetModuleHandle(string? name);
     [DllImport("kernel32.dll")]
     internal static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostMessage(nint hwnd, int message, nint wParam, nint lParam);
     [DllImport("user32.dll", SetLastError = true)]
@@ -95,6 +95,63 @@ internal static class Native
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint MsgWaitForMultipleObjectsEx(uint count, [In] nint[] handles,
         uint milliseconds, uint wakeMask, uint flags);
+
+    internal const uint WmInput = 0x00FF;
+    internal const uint RidevInputSink = 0x0100, RidevRemove = 0x0001;
+    internal const uint RidInput = 0x10000003;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern nint CreateWindowExW(uint exStyle, string className, string windowName,
+        uint style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint param);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DestroyWindow(nint window);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterRawInputDevices([In] RawInputDevice[] devices, uint count, uint size);
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern uint GetRawInputData(nint input, uint command, out RawMouseInput data,
+        ref uint size, uint headerSize);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern nint DefWindowProcW(nint window, uint message, nuint wParam, nint lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern nint DispatchMessageW(ref Message message);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RawInputDevice
+    {
+        internal ushort Page, Usage;
+        internal uint Flags;
+        internal nint Target;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RawInputHeader
+    {
+        internal uint Type, Size;
+        internal nint Device;
+        internal nuint WParam;
+    }
+
+    // RAWMOUSE's ULONG-aligned button union starts at offset 4.
+    // Keep the native layout on both x86 and x64. Motion fields are
+    // required for the ABI, never retained or used by the observer.
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RawMouse
+    {
+        internal ushort Flags, Padding;
+        internal ushort ButtonFlags, ButtonData;
+        internal uint RawButtons;
+        internal int LastX, LastY;
+        internal uint ExtraInformation;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RawMouseInput
+    {
+        internal RawInputHeader Header;
+        internal RawMouse Mouse;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Message

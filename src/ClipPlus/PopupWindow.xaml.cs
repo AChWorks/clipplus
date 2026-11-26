@@ -251,7 +251,7 @@ public partial class PopupWindow : Window
         else if (_inMoveSize && message == 0x0214) // WM_SIZING
             _userSizing = true;
         else if (message == 0x0232) // WM_EXITSIZEMOVE
-            Run(() => FinishMoveSize(hwnd));
+            Run(() => CompleteMoveSize(hwnd));
         else if (_inMoveSize && (message is 0x0215 or 0x001F)) // WM_CAPTURECHANGED / WM_CANCELMODE
         {
             // Cancellation/capture loss may precede the usual exit message.
@@ -261,7 +261,7 @@ public partial class PopupWindow : Window
             {
                 if (_inMoveSize) Run(() =>
                 {
-                    if (!Native.IsMoveSizeActive(hwnd)) FinishMoveSize(hwnd);
+                    if (!Native.IsMoveSizeActive(hwnd)) CompleteMoveSize(hwnd);
                 });
             }));
         }
@@ -271,12 +271,6 @@ public partial class PopupWindow : Window
     private void ResetMoveSizeTracking()
     {
         _inMoveSize = _userMoving = _userSizing = false;
-    }
-
-    private void FinishMoveSize(nint hwnd)
-    {
-        try { CompleteMoveSize(hwnd); }
-        finally { RenewOutsideClickMonitor(); }
     }
 
     private void CompleteMoveSize(nint hwnd)
