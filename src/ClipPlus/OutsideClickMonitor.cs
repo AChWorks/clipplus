@@ -17,22 +17,29 @@ internal sealed class OutsideClickMonitor : IDisposable
     private readonly int _generation;
     private readonly Thread _thread;
     private readonly Native.HookProc _callback;
-    private uint _threadId;
+    private readonly ManualResetEvent _stop = new(false);
+    private readonly Func<EventWaitHandle, bool>? _signalStop;
     private Exception? _startError;
     private int _outsideButtons;
+    private bool _disposed;
 
-    internal OutsideClickMonitor(nint window, int generation)
+    // Read after joining the native thread; unexpected termination is
+    // reported separately from normal stop and can never strand a callback.
+    internal Exception? Failure { get; private set; }
+    internal bool IsRunning => _thread.IsAlive;
+
+    internal OutsideClickMonitor(nint window, int generation, Func<EventWaitHandle, bool>? signalStop = null)
     {
         _window = window;
         _generation = generation;
+        _signalStop = signalStop;
         _callback = Observe;
-        using var ready = new ManualResetEventSlim();
+        using var ready = new ManualResetEvent(false);
         _thread = new Thread(() =>
         {
             nint hook = 0;
             try
             {
-                _threadId = Native.GetCurrentThreadId();
                 Native.PeekMessage(out _, 0, 0, 0, 0);
                 hook = Native.SetWindowsHookEx(14, _callback, Native.GetModuleHandle(null), 0); // WH_MOUSE_LL
                 if (hook == 0) throw Native.Error("SetWindowsHookEx (floating clipboard)");
@@ -40,15 +47,46 @@ internal sealed class OutsideClickMonitor : IDisposable
             catch (Exception ex) { _startError = ex; }
             finally { ready.Set(); }
             if (hook == 0) return;
-            try { while (Native.GetMessage(out _, 0, 0, 0) > 0) { } }
-            finally { Native.UnhookWindowsHookEx(hook); }
+            try { Pump(); }
+            catch (Exception ex) { Failure = ex; }
+            finally
+            {
+                if (!Native.UnhookWindowsHookEx(hook))
+                    Failure ??= Native.Error("UnhookWindowsHookEx (floating clipboard)");
+                if (Failure is not null)
+                    Native.PostMessage(_window, Native.WmOutsideQuickFault, _generation, 0);
+            }
         }) { IsBackground = true, Name = "ClipPlus outside click" };
-        _thread.Start();
-        ready.Wait();
+        try { _thread.Start(); }
+        catch { _stop.Dispose(); throw; }
+        ready.WaitOne();
         if (_startError is not null)
         {
             _thread.Join();
+            _stop.Dispose();
             throw new InvalidOperationException("Outside-click detection could not be enabled.", _startError);
+        }
+    }
+
+    private void Pump()
+    {
+        // Wait atomically for either the owned stop event or native messages.
+        // Unlike posting WM_QUIT, signaling this event does not depend on
+        // queue capacity, and shutdown wins over pending input. The handle
+        // remains valid until the thread has actually terminated.
+        var handle = _stop.SafeWaitHandle.DangerousGetHandle();
+        const uint sentOrPostedMessages = 0x0040 | 0x0008;
+        const uint inputAvailable = 0x0004;
+        while (true)
+        {
+            var result = Native.MsgWaitForMultipleObjectsEx(1, ref handle, uint.MaxValue,
+                sentOrPostedMessages, inputAvailable);
+            if (result == 0) return;
+            if (result != 1) throw Native.Error("Wait for outside-click messages");
+            // PeekMessage dispatches sent low-level hook callbacks, even if
+            // there is no posted message to retrieve. This thread owns no HWND.
+            if (Native.PeekMessage(out var message, 0, 0, 0, 1) && message.Id == 0x0012)
+                throw new InvalidOperationException("Outside-click message loop quit unexpectedly.");
         }
     }
 
@@ -89,8 +127,11 @@ internal sealed class OutsideClickMonitor : IDisposable
 
     public void Dispose()
     {
-        if (_thread.IsAlive && !Native.PostThreadMessage(_threadId, 0x0012, 0, 0) && _thread.IsAlive)
-            throw Native.Error("Stop outside-click detection");
+        if (_disposed) return;
+        if (_thread.IsAlive && !(_signalStop?.Invoke(_stop) ?? _stop.Set()) && _thread.IsAlive)
+            throw new InvalidOperationException("Could not signal outside-click detection to stop.");
         _thread.Join();
+        _stop.Dispose();
+        _disposed = true;
     }
 }

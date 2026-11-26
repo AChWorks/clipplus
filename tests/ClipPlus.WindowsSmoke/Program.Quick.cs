@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -14,11 +15,21 @@ internal static partial class Program
         var preferences = new Preferences { AutoCollapseQuickPanel = false };
         long pasted = 0;
         var succeeded = false;
+        var failObserverStop = false;
+        var stopErrors = new List<Exception>();
         var popup = new PopupWindow(store, _ => Task.CompletedTask,
             (geometry, quick) => preferences = preferences.WithGeometry(geometry, quick),
-            (message, error) => { if (error is not null) throw new InvalidOperationException(message, error); },
+            (message, error) =>
+            {
+                if (error is null) return;
+                if (failObserverStop && error is InvalidOperationException &&
+                    error.Message == "Could not signal outside-click detection to stop.")
+                    stopErrors.Add(error);
+                else throw new InvalidOperationException(message, error);
+            },
             () => preferences, (view, compact) => preferences = preferences with { ActiveView = view, CompactView = compact },
-            (id, _) => { pasted = id; return Task.FromResult(succeeded); });
+            (id, _) => { pasted = id; return Task.FromResult(succeeded); },
+            signalOutsideClickStop: stop => !failObserverStop && stop.Set());
         var list = (ListBox)popup.FindName("ClipList");
         var search = (TextBox)popup.FindName("SearchBox");
         var toggle = (Button)popup.FindName("QuickModeButton");
@@ -56,7 +67,16 @@ internal static partial class Program
             Check(list.Items.Count == 302 && list.Items.Cast<PopupWindow.HistoryEntry>().All(entry => entry.Item.Pinned) &&
                 Descendants<ListBoxItem>(list).Count() < 50,
                 "quick list excludes recent clips and virtualizes hundreds of pins");
+            VerifyPanelSpacing(popup, true, "quick overflowing");
             SavePopupEvidence(popup, "quick-overflow");
+            foreach (var theme in new[] { (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
+            {
+                popup.ApplyTheme(theme.Dark, theme.Contrast);
+                VerifyPanelSpacing(popup, true, "quick overflow " + theme.Name);
+                SavePopupEvidence(popup, "quick-spacing-" + theme.Name);
+            }
+            popup.ApplyTheme(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme", 1) is int light && light == 0, SystemParameters.HighContrast);
             search.Text = "match";
             popup.UpdateLayout();
             Check(list.Items.Count == 2 && ((PopupWindow.HistoryEntry)list.Items[0]).Item.Id == title,
@@ -66,6 +86,7 @@ internal static partial class Program
                 !((FrameworkElement)popup.FindName("NavigationHost")).IsVisible &&
                 !((FrameworkElement)popup.FindName("FooterHost")).IsVisible,
                 "quick rows expose titles only, without previews or management controls");
+            VerifyPanelSpacing(popup, false, "quick filtered");
             SavePopupEvidence(popup, "quick-filtered");
             var button = Descendants<Button>(list).First(b => AutomationProperties.GetName(b).StartsWith("Paste: Match", StringComparison.Ordinal));
             Click(button);
@@ -87,12 +108,14 @@ internal static partial class Program
             search.Text = "match";
             popup.UpdateLayout();
             VerifyQuickSelection(popup, list, search);
-            VerifyFloatingVisual(popup, store, title, () => preferences, next => preferences = next);
+            VerifyFloatingVisual(popup, store, title, () => preferences, next => preferences = next,
+                fail => failObserverStop = fail, () => stopErrors.Count);
         }
-        finally { popup.HidePopup(); popup.Close(); }
+        finally { failObserverStop = false; popup.HidePopup(); popup.Close(); }
     }
 
-    private static void VerifyFloatingVisual(PopupWindow popup, ClipStore store, long pin, Func<Preferences> get, Action<Preferences> set)
+    private static void VerifyFloatingVisual(PopupWindow popup, ClipStore store, long pin, Func<Preferences> get,
+        Action<Preferences> set, Action<bool> failStop, Func<int> stopErrors)
     {
         var targetButton = new Button { Content = "Outside click target" };
         var clicks = 0;
@@ -170,10 +193,36 @@ internal static partial class Program
                 list.Items.Cast<PopupWindow.HistoryEntry>().Any(entry => entry.Item.Id == pin && entry.Item.Title == "Match updated while hidden"),
                 "explicit pin invalidation refreshes a collapsed view on reopen");
             var close = (Button)popup.FindName("CloseButton");
+            var toggle = (Button)popup.FindName("QuickModeButton");
+            failStop(true);
+            try
+            {
+                ClickTarget();
+                PumpUntil(() => stopErrors() == 1);
+                Check(clicks == 6 && stopErrors() == 1 && popup.IsQuickMode && popup.IsVisible && !icon.IsVisible &&
+                    search.Text == query && Native.GetForegroundWindow() == targetHwnd,
+                    "failed native stop during outside collapse reports the error and keeps only the usable expanded panel");
+                close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, close));
+                Check(stopErrors() == 2 && popup.IsVisible && popup.IsQuickMode && !icon.IsVisible,
+                    "failed stop on header Close preserves quick session without dispatcher exception");
+                toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, toggle));
+                Check(stopErrors() == 3 && popup.IsVisible && popup.IsQuickMode && !icon.IsVisible,
+                    "failed stop on unpin preserves quick session without dispatcher exception");
+                popup.Close();
+                Check(stopErrors() == 4 && popup.IsVisible && popup.IsQuickMode && !icon.IsVisible,
+                    "failed stop cancels native Close before destroying the usable window");
+            }
+            finally { failStop(false); }
+            ClickTarget();
+            PumpUntil(() => clicks == 7 && icon.IsVisible);
+            Check(clicks == 7 && stopErrors() == 4 && !popup.IsVisible && icon.IsVisible,
+                "retry stops the retained native observer and successfully collapses");
+            popup.OpenFloatingPanel();
+            Check(popup.IsVisible && !icon.IsVisible, "session reopens after stop recovery");
             close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, close));
             Check(!icon.IsVisible && !popup.IsVisible && !popup.IsQuickMode &&
                 !Application.Current.Windows.OfType<FloatingIconWindow>().Any(),
-                "closing the quick session releases its floating window");
+                "closing the quick session releases its floating window after stop recovery");
         }
         finally { target.Close(); }
     }

@@ -18,8 +18,9 @@ public partial class PopupWindow
             StopOutsideClickMonitor();
             return;
         }
-        if (_outsideClick is not null) return;
-        try { _outsideClick = new OutsideClickMonitor(Handle, ++_outsideClickGeneration); }
+        if (_outsideClick is { IsRunning: true }) return;
+        StopOutsideClickMonitor(); // Reap a terminated observer before creating another.
+        try { _outsideClick = new OutsideClickMonitor(Handle, ++_outsideClickGeneration, _signalOutsideClickStop); }
         catch (Exception ex)
         {
             // Keep the full panel usable rather than silently hiding it.
@@ -30,8 +31,11 @@ public partial class PopupWindow
     private void StopOutsideClickMonitor()
     {
         if (_outsideClick is null) return;
-        _outsideClick.Dispose();
+        var observer = _outsideClick;
+        observer.Dispose(); // On failure retain ownership and leave UI state unchanged.
         _outsideClick = null;
+        if (observer.Failure is { } error)
+            _report("Outside-click detection stopped unexpectedly.", error);
     }
 
     private void EndFloatingSession()
@@ -52,27 +56,40 @@ public partial class PopupWindow
     private void CollapseQuickPanel()
     {
         if (!IsQuickMode || !IsVisible || !_preferences().AutoCollapseQuickPanel) return;
-        if (!Native.GetWindowRect(Handle, out var rect)) throw Native.Error("GetWindowRect (quick panel)");
-        if (_floatingIcon is null)
-        {
-            var icon = new FloatingIconWindow(OpenFloatingPanel, SaveIconPosition, _report);
-            icon.Closed += (_, _) => _floatingIcon = null;
-            _floatingIcon = icon;
-        }
-
-        var saved = _preferences().FloatingPosition;
-        var anchor = _floatingAnchor ?? (saved is null
-            ? new Native.Point { X = rect.Left, Y = rect.Top }
-            : new Native.Point { X = saved.X, Y = saved.Y });
-        ApplyTheme();
-        _floatingIcon.ApplyTheme(_dark, _highContrast);
-        var actual = _floatingIcon.ShowAt(anchor);
-        if (saved is null && _floatingAnchor is null) SaveIconPosition(actual);
-        else _floatingAnchor = actual;
+        // The current surface remains visible until the observer is stopped.
+        // If signaling fails, retain both the observer and the usable panel.
         StopOutsideClickMonitor();
-        _searchTarget = null;
-        Native.SetNoActivate(Handle, true);
-        Hide(); // This is still quick mode; do not reset the normal view.
+        try
+        {
+            if (!Native.GetWindowRect(Handle, out var rect)) throw Native.Error("GetWindowRect (quick panel)");
+            if (_floatingIcon is null)
+            {
+                var icon = new FloatingIconWindow(OpenFloatingPanel, SaveIconPosition, _report);
+                icon.Closed += (_, _) => _floatingIcon = null;
+                _floatingIcon = icon;
+            }
+
+            var saved = _preferences().FloatingPosition;
+            var anchor = _floatingAnchor ?? (saved is null
+                ? new Native.Point { X = rect.Left, Y = rect.Top }
+                : new Native.Point { X = saved.X, Y = saved.Y });
+            ApplyTheme();
+            _floatingIcon.ApplyTheme(_dark, _highContrast);
+            var actual = _floatingIcon.ShowAt(anchor);
+            if (saved is null && _floatingAnchor is null) SaveIconPosition(actual);
+            else _floatingAnchor = actual;
+            _searchTarget = null;
+            Native.SetNoActivate(Handle, true);
+            Hide(); // This is still quick mode; do not reset the normal view.
+        }
+        catch
+        {
+            // A failed collapse leaves the expanded surface available and
+            // restores its observer. Never expose two usable surfaces.
+            _floatingIcon?.Hide();
+            if (IsVisible) UpdateOutsideClickMonitor();
+            throw;
+        }
     }
 
     internal void OpenFloatingPanel()
@@ -99,7 +116,6 @@ public partial class PopupWindow
             PlaceWindow(hwnd, monitor, anchor, geometry.Height, false, geometry.Width);
             SelectQuickEntry(null, true);
             icon.Hide();
-            UpdateOutsideClickMonitor();
         }
         catch
         {
@@ -107,6 +123,9 @@ public partial class PopupWindow
             throw;
         }
         finally { _placing = false; }
+        // Starting the observer is optional for using the expanded panel.
+        // Do not roll back the visible surface on observer startup failure.
+        UpdateOutsideClickMonitor();
     }
 
     internal void QuickBehaviorChanged() => Run(() =>

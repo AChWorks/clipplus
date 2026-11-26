@@ -18,6 +18,7 @@
                 <ResourceDictionary Source="Assets/ClipPlusIcon.xaml"/>
             </ResourceDictionary.MergedDictionaries>
             <GridLength x:Key="HistoryGutter">12</GridLength>
+            <Thickness x:Key="ScrollIndicatorInset">0,0,2,0</Thickness>
             <Style TargetType="Button">
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
@@ -211,7 +212,9 @@
             </Style>
         </ResourceDictionary>
     </Window.Resources>
-    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}" Padding="11,9,11,7">
+    <!-- One balanced content inset and one shared scrollbar column. Keep
+         the native resize border clear and the card width stable on overflow. -->
+    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}" Padding="8,9,8,7">
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -303,7 +306,7 @@
                                     <ControlTemplate TargetType="{x:Type ScrollBar}">
                                         <Grid x:Name="ScrollSurface" Background="Transparent" SnapsToDevicePixels="True">
                                             <Border x:Name="ScrollRail" Width="8" CornerRadius="4"
-                                                    HorizontalAlignment="Center" Background="{DynamicResource ScrollRailBrush}"
+                                                    HorizontalAlignment="Right" Margin="{StaticResource ScrollIndicatorInset}" Background="{DynamicResource ScrollRailBrush}"
                                                     Opacity="0"/>
                                             <Track x:Name="PART_Track" IsDirectionReversed="True" Orientation="{TemplateBinding Orientation}">
                                                 <Track.DecreaseRepeatButton>
@@ -321,7 +324,7 @@
                                                             <ControlTemplate TargetType="{x:Type Thumb}">
                                                                 <Grid Background="Transparent">
                                                                     <Border x:Name="ScrollIndicator" Width="{DynamicResource ScrollIndicatorWidth}" CornerRadius="3"
-                                                                            HorizontalAlignment="Center" Background="{DynamicResource ScrollThumbBrush}"/>
+                                                                            HorizontalAlignment="Right" Margin="{StaticResource ScrollIndicatorInset}" Background="{DynamicResource ScrollThumbBrush}"/>
                                                                 </Grid>
                                                                 <ControlTemplate.Triggers>
                                                                     <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="True">

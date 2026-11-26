@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
@@ -29,6 +30,7 @@ public partial class PopupWindow : Window
     private readonly Func<long, Native.PasteTarget?, Task<bool>>? _quickPaste;
     private readonly HwndSourceHook _windowHook;
     private readonly Action<WindowPosition>? _saveFloatingPosition;
+    private readonly Func<EventWaitHandle, bool>? _signalOutsideClickStop;
     private readonly Dictionary<long, Row> _rows = new();
     private ObservableCollection<HistoryEntry> _entries = new();
     // Include visual metadata so renaming a category or switching compact
@@ -70,7 +72,8 @@ public partial class PopupWindow : Window
     internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<PopupGeometry, bool> saveGeometry,
         Action<string, Exception?> report, Func<Preferences> preferences, Action<long, bool> saveView,
         Func<long, Native.PasteTarget?, Task<bool>>? quickPaste = null,
-        Action<WindowPosition>? saveFloatingPosition = null)
+        Action<WindowPosition>? saveFloatingPosition = null,
+        Func<EventWaitHandle, bool>? signalOutsideClickStop = null)
     {
         _store = store;
         _paste = paste;
@@ -80,6 +83,7 @@ public partial class PopupWindow : Window
         _saveView = saveView;
         _quickPaste = quickPaste;
         _saveFloatingPosition = saveFloatingPosition;
+        _signalOutsideClickStop = signalOutsideClickStop;
         // Keep the hook rooted for the entire HWND lifetime.
         _windowHook = OnWindowMessage;
         InitializeComponent();
@@ -113,7 +117,7 @@ public partial class PopupWindow : Window
                 if (IsVisible && !IsQuickMode) FocusSearch();
             });
         };
-        CloseButton.Click += (_, _) => HidePopup();
+        CloseButton.Click += (_, _) => Run(HidePopup);
         QuickModeButton.Click += (_, _) => Run(ToggleQuickMode);
         ClearButton.Click += (_, _) => Run(() =>
         {
@@ -134,11 +138,24 @@ public partial class PopupWindow : Window
         ClipList.SelectionChanged += (_, _) => PreviewSelected();
         PreviewKeyDown += OnKey;
         InputManager.Current.PostProcessInput += OnPostProcessInput;
+        Closing += (_, e) =>
+        {
+            // A user-initiated native Close can be canceled before the HWND
+            // is destroyed. On application shutdown, Closed still attempts
+            // cleanup; WPF may ignore cancellation during Shutdown().
+            if (_outsideClick is null) return;
+            var stopped = false;
+            Run(() => { StopOutsideClickMonitor(); stopped = true; });
+            if (!stopped) e.Cancel = true;
+        };
         Closed += (_, _) =>
         {
-            EndFloatingSession();
+            // Actual application shutdown must not leak an exception from
+            // native cleanup into the dispatcher or skip the remaining cleanup.
+            Run(EndFloatingSession);
             CancelPaletteHover();
             _paletteTimer.Stop();
+            _statusTimer.Stop();
             InputManager.Current.PostProcessInput -= OnPostProcessInput;
         };
         Deactivated += (_, _) =>
@@ -175,6 +192,16 @@ public partial class PopupWindow : Window
 
     private nint OnWindowMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
+        if (message == Native.WmOutsideQuickFault)
+        {
+            handled = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                if (_outsideClick is not null && wParam == _outsideClickGeneration)
+                    Run(StopOutsideClickMonitor);
+            }));
+            return 0;
+        }
         if (message == Native.WmOutsideQuickClick)
         {
             handled = true;
@@ -357,6 +384,9 @@ public partial class PopupWindow : Window
 
     internal void HidePopup()
     {
+        // A failed observer stop must leave the expanded quick panel usable.
+        // Complete quick cleanup before changing either surface's visibility.
+        if (IsQuickMode) ResetQuickMode();
         EndTitle(false, false);
         ClosePalette(false);
         CloseCategoryPicker(false);
@@ -364,7 +394,6 @@ public partial class PopupWindow : Window
         _refreshPending = false;
         _reconcileRequested = false;
         if (IsVisible) Hide();
-        if (IsQuickMode) ResetQuickMode();
         NormalTarget = null;
     }
 

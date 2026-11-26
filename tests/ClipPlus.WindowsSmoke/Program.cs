@@ -212,6 +212,15 @@ internal static partial class Program
                   Math.Abs(indicator.ActualWidth - expectedIndicatorWidth) <= 0.5,
                 "Windows-style scrollbar has narrow indicator and 12-DIP interaction area");
             Check(viewer.ScrollableHeight > 0 && bar.Maximum > 0, "native scroll range remains usable");
+            VerifyPanelSpacing(popup, true, "ordinary overflowing");
+            foreach (var theme in new[] { (Dark: false, Contrast: false, Name: "light"), (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
+            {
+                popup.ApplyTheme(theme.Dark, theme.Contrast);
+                VerifyPanelSpacing(popup, true, "ordinary overflow " + theme.Name);
+                SavePopupEvidence(popup, "categories-spacing-" + theme.Name);
+            }
+            popup.ApplyTheme(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "AppsUseLightTheme", 1) is int light && light == 0, SystemParameters.HighContrast);
             Check(Descendants<ListBoxItem>(list).Count() < list.Items.Count, "overflowing history realizes only a subset of cards");
             viewer.ScrollToBottom();
             popup.UpdateLayout();

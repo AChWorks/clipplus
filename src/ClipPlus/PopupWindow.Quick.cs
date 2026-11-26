@@ -71,8 +71,9 @@ public partial class PopupWindow
             if (IsQuickMode)
             {
                 var foreground = Native.GetForegroundWindow();
-                NormalTarget = foreground == hwnd ? _searchTarget : Native.ExternalTarget(foreground);
+                var normalTarget = foreground == hwnd ? _searchTarget : Native.ExternalTarget(foreground);
                 ResetQuickMode();
+                NormalTarget = normalTarget;
                 var preferences = _preferences();
                 var anchor = preferences.WindowPosition is { } position
                     ? new Native.Point { X = position.X, Y = position.Y } : _normalOrigin;
@@ -263,7 +264,7 @@ public partial class PopupWindow
             {
                 if (_searchTarget is { IsValid: true } target && Native.GetForegroundWindow() == Handle)
                     Native.SetForegroundWindow(target.Handle);
-                HidePopup();
+                Run(HidePopup);
             }
         }
         else if (e.Key is Key.Down or Key.Up)

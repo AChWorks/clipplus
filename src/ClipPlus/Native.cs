@@ -11,6 +11,7 @@ internal static class Native
     internal const int WmOpenPopup = 0x8001;
     internal const int WmShortcutFault = 0x8002;
     internal const int WmOutsideQuickClick = 0x8003;
+    internal const int WmOutsideQuickFault = 0x8004;
     internal const int VkV = 0x56;
     internal const int VkControl = 0x11, VkShift = 0x10, VkAlt = 0x12;
     internal const int VkLWin = 0x5B, VkRWin = 0x5C;
@@ -90,6 +91,10 @@ internal static class Native
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PeekMessage(out Message message, nint hwnd, uint min, uint max, uint remove);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern uint MsgWaitForMultipleObjectsEx(uint count, ref nint handle,
+        uint milliseconds, uint wakeMask, uint flags);
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Message
