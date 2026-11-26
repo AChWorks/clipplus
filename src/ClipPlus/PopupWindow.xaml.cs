@@ -137,7 +137,6 @@ public partial class PopupWindow : Window
         Closed += (_, _) =>
         {
             EndFloatingSession();
-            _floatingIcon?.Close();
             CancelPaletteHover();
             _paletteTimer.Stop();
             InputManager.Current.PostProcessInput -= OnPostProcessInput;
@@ -377,9 +376,9 @@ public partial class PopupWindow : Window
 
     internal void HistoryChanged()
     {
-        if (!IsVisible) return;
+        if (!IsVisible && !IsQuickMode) return;
         _refreshPending = true;
-        Run(FlushPendingHistory);
+        if (IsVisible) Run(FlushPendingHistory);
     }
 
     private bool InteractionActive => Mouse.LeftButton == MouseButtonState.Pressed || _draggingCategory ||

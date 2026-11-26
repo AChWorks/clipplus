@@ -37,7 +37,9 @@ public partial class PopupWindow
     private void EndFloatingSession()
     {
         StopOutsideClickMonitor();
-        _floatingIcon?.Hide();
+        // The hidden icon is reused during expand/collapse, but once the
+        // pinned session ends there is no reason to retain its native window.
+        _floatingIcon?.Close();
         _floatingAnchor = null;
     }
 
@@ -89,9 +91,13 @@ public partial class PopupWindow
             Native.SetNoActivate(hwnd, true);
             ShowActivated = false;
             PlaceWindow(hwnd, monitor, anchor, geometry.Height, false, geometry.Width);
-            Refresh(false);
+            // Collapse only hides the existing quick session. Clipboard
+            // capture never changes pins, and query changes already refresh
+            // the list. Honor explicit history invalidation while hidden.
+            if (_refreshPending) Refresh(false);
             Show();
             PlaceWindow(hwnd, monitor, anchor, geometry.Height, false, geometry.Width);
+            SelectQuickEntry(null, true);
             icon.Hide();
             UpdateOutsideClickMonitor();
         }

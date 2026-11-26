@@ -32,28 +32,30 @@ jobs:
         run: |
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | Format-List
           New-Item -ItemType Directory -Path TestResults -Force | Out-Null
-          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v020'
-          git fetch --no-tags origin refs/tags/v0.2.0:refs/tags/v0.2.0
+          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v023'
+          git fetch --no-tags origin refs/tags/v0.2.3:refs/tags/v0.2.3
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git worktree add --detach $baseline f6199139acfe26b30c04b931b5819e9da10ed986
+          git worktree add --detach $baseline 0594f3cc9fc58304ff3e8575beeff804c4e5bcfc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           try {
             $source = Join-Path $baseline 'tests/ClipPlus.WindowsSmoke'
             Copy-Item tests/ClipPlus.WindowsSmoke/Program.Benchmark.cs $source
-            $program = Join-Path $source 'Program.cs'
-            $content = Get-Content -LiteralPath $program -Raw
-            $anchor = '        var application = new Application'
-            if (-not $content.Contains($anchor)) { throw 'Released benchmark entry point missing.' }
-            $content.Replace($anchor, "        if (args.Contains(""--popup-benchmark"")) return PopupBenchmark();`n$anchor") | Set-Content -LiteralPath $program -Encoding utf8NoBOM
             dotnet build (Join-Path $source 'ClipPlus.WindowsSmoke.csproj') -c Release
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v020.txt
+            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v023.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v024.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if (-not (Select-String -Path TestResults/performance-v020.txt -Pattern 'BENCH first-open-recent') -or
-                -not (Select-String -Path TestResults/performance-v024.txt -Pattern 'BENCH first-open-recent')) {
-              throw 'Interactive WPF benchmark did not run.'
+            foreach ($file in @('TestResults/performance-v023.txt','TestResults/performance-v024.txt')) {
+              if (-not (Select-String -Path $file -Pattern 'BENCH first-open-recent') -or
+                  -not (Select-String -Path $file -Pattern 'BENCH idle-quick-expanded') -or
+                  -not (Select-String -Path $file -Pattern 'BENCH motion-quick-expanded')) {
+                throw "Interactive WPF benchmark incomplete: $file"
+              }
+            }
+            if (-not (Select-String -Path TestResults/performance-v024.txt -Pattern 'BENCH floating-expand-final') -or
+                -not (Select-String -Path TestResults/performance-v024.txt -Pattern 'BENCH idle-floating-after-cycles')) {
+              throw 'Floating transition and resource measurements did not run.'
             }
           } finally { git worktree remove --force $baseline }
       - name: Upload synthetic popup visual evidence

@@ -40,7 +40,7 @@ if ((Get-FileHash -LiteralPath $quickFile -Algorithm SHA256).Hash -ne '4B86FD12B
     throw 'Released v0.2.2 installer checksum mismatch.'
 }
 $widthFile = (Get-Item -LiteralPath $WidthSetup).FullName
-$widthExeHash = 'AFF8ADADA7BB93C44E2EAB15729D8F4DBF6211A9FEEDB38D70BD10C0AB694099'
+$widthExeHash = 'AFF8ADADA7BB93C44E2EAB15729D8F4DBF6211A9FEEBD38D70BD10C0AB694099'
 if ((Get-FileHash -LiteralPath $widthFile -Algorithm SHA256).Hash -ne '7ECA888EF7FC484AFD2D59CF37BE32FA02649B4B8EEC58C2BEFA810DBE76D29B') {
     throw 'Released v0.2.3 installer checksum mismatch.'
 }
@@ -953,10 +953,13 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }
         Invoke-Wizard $release.Setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
         $installed = $true
-        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $release.ExeHash -or
-            -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
+        $actualExeHash = (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash
+        if ($actualExeHash -ne $release.ExeHash) {
+            throw "Installed $($release.Version) executable checksum mismatch: expected $($release.ExeHash), actual $actualExeHash."
+        }
+        if (-not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
             (Test-Path -LiteralPath $context.LegacyShortcut)) {
-            throw "Expected exact released $($release.Version) and its user shortcut."
+            throw "Expected released $($release.Version) to own its per-user shortcut, not a legacy shortcut."
         }
         Stop-ClipPlus $context
         $seedArgs = @('--isolated-desktop','--seed-v020-profile')

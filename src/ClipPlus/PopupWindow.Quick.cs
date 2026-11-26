@@ -138,12 +138,18 @@ public partial class PopupWindow
         var items = _store.List(SearchBox.Text, pinnedOnly: true);
         var next = items.Select(item => new HistoryEntry(item, null, null, false, true)).ToList();
         UpdateEntries(next);
-        EmptyLabel.Text = string.IsNullOrWhiteSpace(SearchBox.Text) || !_store.AvailableViews().Pinned
-            ? "No pinned clips." : "No matching pinned clips.";
+        if (items.Count == 0)
+            EmptyLabel.Text = string.IsNullOrWhiteSpace(SearchBox.Text) || !_store.AvailableViews().Pinned
+                ? "No pinned clips." : "No matching pinned clips.";
         EmptyLabel.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SelectQuickEntry(previous, !preserveSelection);
+    }
+
+    private void SelectQuickEntry(long? previous, bool scroll)
+    {
         var selected = previous is long id ? _entries.FirstOrDefault(entry => entry.Item.Id == id) : null;
         ClipList.SelectedItem = selected ?? _entries.FirstOrDefault();
-        if (!preserveSelection && ClipList.SelectedItem is not null)
+        if (scroll && IsVisible && ClipList.SelectedItem is not null)
             ClipList.ScrollIntoView(ClipList.SelectedItem);
     }
 
@@ -238,7 +244,10 @@ public partial class PopupWindow
                 // Do not call FocusSearch, Activate or any keyboard-focus
                 // operation here. TextChanged only refreshes the pin list.
                 if (SearchBox.Text.Length != 0) SearchBox.Clear();
-                else Refresh(false);
+                else if (_refreshPending) Refresh(false);
+                // A successful unfiltered paste cannot change the pins or
+                // their order. Reset selection without reading SQLite again.
+                else SelectQuickEntry(null, true);
             }
         }
         finally { _quickPasting = false; }

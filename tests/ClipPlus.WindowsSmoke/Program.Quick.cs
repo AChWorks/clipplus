@@ -87,12 +87,12 @@ internal static partial class Program
             search.Text = "match";
             popup.UpdateLayout();
             VerifyQuickSelection(popup, list, search);
-            VerifyFloatingVisual(popup, () => preferences, next => preferences = next);
+            VerifyFloatingVisual(popup, store, title, () => preferences, next => preferences = next);
         }
         finally { popup.HidePopup(); popup.Close(); }
     }
 
-    private static void VerifyFloatingVisual(PopupWindow popup, Func<Preferences> get, Action<Preferences> set)
+    private static void VerifyFloatingVisual(PopupWindow popup, ClipStore store, long pin, Func<Preferences> get, Action<Preferences> set)
     {
         var targetButton = new Button { Content = "Outside click target" };
         var clicks = 0;
@@ -153,11 +153,27 @@ internal static partial class Program
             ClickTarget();
             PumpUntil(() => clicks == 4 && icon.IsVisible);
             Check(clicks == 4 && icon.IsVisible && !popup.IsVisible, "re-enabling floating mode restores outside-click detection");
+            var list = (ListBox)popup.FindName("ClipList");
+            var search = (TextBox)popup.FindName("SearchBox");
+            var query = search.Text;
+            var source = list.ItemsSource;
             popup.OpenFloatingPanel();
-            Check(popup.IsVisible && !icon.IsVisible, "collapsed session reopens");
+            Check(popup.IsVisible && !icon.IsVisible && ReferenceEquals(source, list.ItemsSource) && search.Text == query,
+                "collapsed session reopens with the existing filtered view");
+            ClickTarget();
+            PumpUntil(() => clicks == 5 && icon.IsVisible);
+            Check(clicks == 5 && icon.IsVisible && !popup.IsVisible, "collapse again before explicit history invalidation");
+            store.SetTitle(pin, "Match updated while hidden");
+            popup.HistoryChanged();
+            popup.OpenFloatingPanel();
+            Check(popup.IsVisible && !icon.IsVisible && search.Text == query &&
+                list.Items.Cast<PopupWindow.HistoryEntry>().Any(entry => entry.Item.Id == pin && entry.Item.Title == "Match updated while hidden"),
+                "explicit pin invalidation refreshes a collapsed view on reopen");
             var close = (Button)popup.FindName("CloseButton");
             close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, close));
-            Check(!icon.IsVisible && !popup.IsVisible && !popup.IsQuickMode, "closing the quick session hides all floating UI");
+            Check(!icon.IsVisible && !popup.IsVisible && !popup.IsQuickMode &&
+                !Application.Current.Windows.OfType<FloatingIconWindow>().Any(),
+                "closing the quick session releases its floating window");
         }
         finally { target.Close(); }
     }
