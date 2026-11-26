@@ -71,8 +71,9 @@ public partial class PopupWindow
             if (IsQuickMode)
             {
                 var foreground = Native.GetForegroundWindow();
-                NormalTarget = foreground == hwnd ? _searchTarget : Native.ExternalTarget(foreground);
+                var normalTarget = foreground == hwnd ? _searchTarget : Native.ExternalTarget(foreground);
                 ResetQuickMode();
+                NormalTarget = normalTarget;
                 var preferences = _preferences();
                 var anchor = preferences.WindowPosition is { } position
                     ? new Native.Point { X = position.X, Y = position.Y } : _normalOrigin;
@@ -97,8 +98,10 @@ public partial class PopupWindow
             NormalTarget = null;
             SetQuickAppearance(true);
             SearchBox.Text = "";
-            var geometry = _preferences().QuickPanel;
-            var origin = geometry.Position is { } saved
+            var quickPreferences = _preferences();
+            var geometry = quickPreferences.QuickPanel;
+            var quickPosition = quickPreferences.AutoCollapseQuickPanel ? quickPreferences.FloatingPosition ?? geometry.Position : geometry.Position;
+            var origin = quickPosition is { } saved
                 ? new Native.Point { X = saved.X, Y = saved.Y } : _normalOrigin;
             PlaceWindow(hwnd, Native.MonitorFromPoint(origin, 2), origin, geometry.Height, false, geometry.Width);
             Refresh(false);
@@ -111,6 +114,7 @@ public partial class PopupWindow
                 // explicitly. Do not retain a stale target for future clicks.
                 Native.SetForegroundWindow(target.Handle);
             }
+            UpdateOutsideClickMonitor();
         }
         finally { _placing = false; }
     }
@@ -121,6 +125,7 @@ public partial class PopupWindow
         _placing = true;
         try
         {
+            EndFloatingSession();
             _searchTarget = null;
             SetQuickAppearance(false);
             SearchBox.Text = _normalSearch;
@@ -134,12 +139,18 @@ public partial class PopupWindow
         var items = _store.List(SearchBox.Text, pinnedOnly: true);
         var next = items.Select(item => new HistoryEntry(item, null, null, false, true)).ToList();
         UpdateEntries(next);
-        EmptyLabel.Text = string.IsNullOrWhiteSpace(SearchBox.Text) || !_store.AvailableViews().Pinned
-            ? "No pinned clips." : "No matching pinned clips.";
+        if (items.Count == 0)
+            EmptyLabel.Text = string.IsNullOrWhiteSpace(SearchBox.Text) || !_store.AvailableViews().Pinned
+                ? "No pinned clips." : "No matching pinned clips.";
         EmptyLabel.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SelectQuickEntry(previous, !preserveSelection);
+    }
+
+    private void SelectQuickEntry(long? previous, bool scroll)
+    {
         var selected = previous is long id ? _entries.FirstOrDefault(entry => entry.Item.Id == id) : null;
         ClipList.SelectedItem = selected ?? _entries.FirstOrDefault();
-        if (!preserveSelection && ClipList.SelectedItem is not null)
+        if (scroll && IsVisible && ClipList.SelectedItem is not null)
             ClipList.ScrollIntoView(ClipList.SelectedItem);
     }
 
@@ -229,12 +240,15 @@ public partial class PopupWindow
         _quickPasting = true;
         try
         {
-            if (await _quickPaste(id, target) && IsQuickMode && IsVisible)
+            if (await _quickPaste(id, target) && IsQuickMode)
             {
                 // Do not call FocusSearch, Activate or any keyboard-focus
                 // operation here. TextChanged only refreshes the pin list.
                 if (SearchBox.Text.Length != 0) SearchBox.Clear();
-                else Refresh(false);
+                else if (_refreshPending) Refresh(false);
+                // A successful unfiltered paste cannot change the pins or
+                // their order. Reset selection without reading SQLite again.
+                else SelectQuickEntry(null, true);
             }
         }
         finally { _quickPasting = false; }
@@ -250,7 +264,7 @@ public partial class PopupWindow
             {
                 if (_searchTarget is { IsValid: true } target && Native.GetForegroundWindow() == Handle)
                     Native.SetForegroundWindow(target.Handle);
-                HidePopup();
+                Run(HidePopup);
             }
         }
         else if (e.Key is Key.Down or Key.Up)

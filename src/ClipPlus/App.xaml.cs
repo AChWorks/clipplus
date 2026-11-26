@@ -69,7 +69,7 @@ public partial class App : Application
             _clipboard = new WindowsClipboard(_messages.Handle);
             _shortcut = new ShortcutManager(_messages.Handle);
             _popup = new PopupWindow(_store, PasteNormalAsync, SaveGeometry, Report, () => _preferences, SaveView,
-                PasteQuickAsync);
+                PasteQuickAsync, SaveFloatingPosition);
             _popup.Closed += (_, _) => { if (!_exiting) Shutdown(); };
             MainWindow = _popup;
             CreateTray();
@@ -115,6 +115,25 @@ public partial class App : Application
             _preferences = _preferences with { WindowPosition = null };
             SavePreferences();
         })));
+        var behavior = new Forms.ToolStripMenuItem("Pinned panel behavior");
+        var floating = new Forms.ToolStripMenuItem("Floating icon (Auto-collapse)");
+        var expanded = new Forms.ToolStripMenuItem("Always expanded");
+        behavior.DropDownItems.AddRange(new Forms.ToolStripItem[] { floating, expanded });
+        menu.Items.Add(behavior);
+        void ChangeQuickBehavior(bool autoCollapse)
+        {
+            if (_preferences.AutoCollapseQuickPanel == autoCollapse) return;
+            _preferences = _preferences with { AutoCollapseQuickPanel = autoCollapse };
+            SavePreferences();
+            _popup?.QuickBehaviorChanged();
+        }
+        menu.Opening += (_, _) =>
+        {
+            floating.Checked = _preferences.AutoCollapseQuickPanel;
+            expanded.Checked = !_preferences.AutoCollapseQuickPanel;
+        };
+        floating.Click += (_, _) => Dispatcher.BeginInvoke(new Action(() => ChangeQuickBehavior(true)));
+        expanded.Click += (_, _) => Dispatcher.BeginInvoke(new Action(() => ChangeQuickBehavior(false)));
         var automatic = new Forms.ToolStripMenuItem("Start with Windows") { CheckOnClick = false };
         var mode = new Forms.ToolStripMenuItem("Startup privileges");
         var normal = new Forms.ToolStripMenuItem("Normal");
@@ -337,7 +356,11 @@ public partial class App : Application
         try
         {
             // A persistent quick panel is never toggled away by Win+V.
-            if (_popup.IsVisible && _popup.IsQuickMode) return;
+            if (_popup.IsQuickMode)
+            {
+                if (!_popup.IsVisible) _popup.OpenFloatingPanel();
+                return;
+            }
             if (_popup.IsVisible && _popup.IsActive)
             {
                 if (fromShortcut) _popup.HidePopup();
@@ -435,6 +458,13 @@ public partial class App : Application
         var next = _preferences.WithGeometry(geometry, quick);
         if (next == _preferences) return;
         _preferences = next;
+        SavePreferences();
+    }
+
+    private void SaveFloatingPosition(WindowPosition position)
+    {
+        if (_preferences.FloatingPosition == position) return;
+        _preferences = _preferences with { FloatingPosition = position };
         SavePreferences();
     }
 

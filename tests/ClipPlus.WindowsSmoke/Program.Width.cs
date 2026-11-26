@@ -9,6 +9,37 @@ using ClipPlus.Core;
 
 internal static partial class Program
 {
+    // The shared history layout reserves exactly one gutter, even when
+    // the native scrollbar is disabled. Measure actual layout in DIP rather
+    // than comparing hardcoded screenshot coordinates or OS pixel counts.
+    private static void VerifyPanelSpacing(PopupWindow popup, bool overflowing, string state)
+    {
+        popup.UpdateLayout();
+        var list = (ListBox)popup.FindName("ClipList");
+        var search = (TextBox)popup.FindName("SearchBox");
+        var viewer = Descendants<ScrollViewer>(list).First();
+        var bar = Descendants<ScrollBar>(viewer).Single(b => b.Orientation == Orientation.Vertical && b.IsVisible);
+        var indicator = Descendants<Border>(bar).Single(b => b.Name == "ScrollIndicator");
+        double Left(FrameworkElement element) => element.TranslatePoint(new Point(0, 0), popup).X;
+        double Right(FrameworkElement element) => Left(element) + element.ActualWidth;
+        var row = Descendants<ListBoxItem>(list).FirstOrDefault(r => r.IsVisible);
+        Console.WriteLine(FormattableString.Invariant($"SPACING {state}: window={popup.ActualWidth:F1} search={Left(search):F1}..{Right(search):F1} bar={Left(bar):F1}..{Right(bar):F1} indicator-right={Right(indicator):F1} range={viewer.ScrollableHeight:F1}"));
+        Check((viewer.ScrollableHeight > 0) == overflowing, state + ": expected scroll range");
+        Check(Math.Abs(bar.ActualWidth - 12) <= 1 &&
+            Math.Abs(Right(search) - Left(bar)) <= 2 &&
+            Math.Abs(Left(search) - (popup.ActualWidth - Right(bar))) <= 2,
+            state + ": one stable scrollbar gutter and balanced outer content insets");
+        if (row is not null)
+            Check(Math.Abs(Left(row) - Left(search)) <= 2 && Math.Abs(Right(row) - Right(search)) <= 2,
+                state + ": search and realized card edges stay aligned");
+        // The narrow indicator is trailing-aligned inside the native track;
+        // the entire track remains clickable, outside the resize border.
+        if (overflowing)
+            Check(Math.Abs(Right(bar) - Right(indicator) - 2) <= 1 &&
+                Math.Abs(Left(search) - (popup.ActualWidth - Right(indicator))) <= 4,
+                state + ": no excessive trailing space after the indicator");
+    }
+
     private static void VerifyWidthAndHover()
     {
         using var store = new ClipStore(":memory:");
@@ -130,6 +161,7 @@ internal static partial class Program
                 "narrow compact title trims while retaining its full label");
             foreach (var name in new[] { "Choose color, current Green", "Unpin", "Delete clip", "Paste clip", "Change category: Long category نمونه فارسی" })
                 Fits(Find(row, name), row, 22);
+            VerifyPanelSpacing(popup, false, "ordinary compact narrow");
             SavePopupEvidence(popup, "categories-compact-narrow");
 
             var swatch = Find(row, "Choose color, current Green");
@@ -192,8 +224,10 @@ internal static partial class Program
             Fits((Button)popup.FindName("CloseButton"), popup, 26);
             Fits(toggle, popup, 26);
             Fits(icon, popup, 18);
+            VerifyPanelSpacing(popup, false, "quick narrow light");
             SavePopupEvidence(popup, "quick-narrow-light");
             popup.ApplyTheme(true, false);
+            VerifyPanelSpacing(popup, false, "quick narrow dark");
             SavePopupEvidence(popup, "quick-narrow-dark");
             Click(toggle);
             Check(!popup.IsQuickMode && Math.Abs(popup.ActualWidth - 260) <= 1,

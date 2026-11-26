@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Text;
@@ -56,17 +58,78 @@ internal static partial class Program
             var pinned = (Button)popup.FindName("PinnedTab");
             void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
             void Open() => popup.ShowAt(Native.Anchor(Native.GetForegroundWindow()));
-            void Measure(string name, Action action)
+            void Measure(string name, Action action, bool expanded = true)
             {
                 var clock = Stopwatch.StartNew();
                 action();
                 popup.UpdateLayout();
                 popup.Dispatcher.Invoke(DispatcherPriority.ApplicationIdle, new Action(() => { }));
                 clock.Stop();
-                if (!popup.IsVisible) throw new InvalidOperationException("Benchmark popup was hidden.");
+                if (popup.IsVisible != expanded)
+                    throw new InvalidOperationException("Unexpected benchmark popup visibility.");
                 Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
                     "BENCH {0} ms={1:F2} items={2} realized={3}", name, clock.Elapsed.TotalMilliseconds,
                     list.Items.Count, Descendants<ListBoxItem>(list).Count()));
+            }
+
+            // Sample process CPU (not machine-wide CPU), memory and native
+            // thread count. Keep the dispatcher pumping on a quiet desktop;
+            // the only sampling timer belongs to this test, not the product.
+            void Idle(string name)
+            {
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(150));
+                using var process = Process.GetCurrentProcess();
+                var before = process.TotalProcessorTime;
+                var clock = Stopwatch.StartNew();
+                InstalledFlow.Pump(TimeSpan.FromSeconds(2));
+                clock.Stop();
+                process.Refresh();
+                Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "BENCH idle-{0} elapsedMs={1:F2} cpuMs={2:F2} threads={3} privateMiB={4:F2} workingMiB={5:F2}",
+                    name, clock.Elapsed.TotalMilliseconds, (process.TotalProcessorTime - before).TotalMilliseconds,
+                    process.Threads.Count, process.PrivateMemorySize64 / 1048576.0, process.WorkingSet64 / 1048576.0));
+            }
+
+            // Synthetic pointer motion outside the popup. This compares the
+            // elapsed work of identical native calls with and without the
+            // floating mouse observer. It is not hardware input latency.
+            void Motion(string name)
+            {
+                if (!Native.GetWindowRect(popup.Handle, out var bounds)) throw Native.Error("Benchmark popup bounds");
+                var monitor = Native.MonitorFromRect(ref bounds, 2);
+                var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
+                if (!Native.GetMonitorInfo(monitor, ref info)) throw Native.Error("Benchmark monitor bounds");
+                var x = bounds.Left - info.Work.Left > 10 ? info.Work.Left + 3 : info.Work.Right - 5;
+                var y = bounds.Top - info.Work.Top > 10 ? info.Work.Top + 3 : info.Work.Bottom - 3;
+                const int count = 256;
+                var moves = Enumerable.Range(0, count).Select(i => new Native.Input
+                {
+                    Type = 0,
+                    Data = new Native.InputData { Mouse = new Native.MouseInput
+                        { X = i % 2 == 0 ? 1 : -1, Flags = 0x2001 } } // MOVE | MOVE_NOCOALESCE
+                }).ToArray();
+                var inputSize = Marshal.SizeOf<Native.Input>();
+                for (var sample = 0; sample < 3; sample++)
+                {
+                    if (!Native.SetCursorPos(x, y)) throw Native.Error("Benchmark pointer position");
+                    InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
+                    using var process = Process.GetCurrentProcess();
+                    var before = process.TotalProcessorTime;
+                    var clock = Stopwatch.StartNew();
+                    // SendInput actually inserts native mouse events, rather
+                    // than just changing the cursor position via SetCursorPos.
+                    if (Native.SendInput((uint)count, moves, inputSize) != count)
+                        throw Native.Error("Benchmark native pointer input");
+                    popup.Dispatcher.Invoke(DispatcherPriority.ApplicationIdle, new Action(() => { }));
+                    clock.Stop();
+                    // Allow queued input/observer work to settle before taking
+                    // the CPU sample, without including this wait in ms.
+                    InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
+                    process.Refresh();
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                        "BENCH motion-{0} ms={1:F2} cpuMs={2:F2} moves={3}", name, clock.Elapsed.TotalMilliseconds,
+                        (process.TotalProcessorTime - before).TotalMilliseconds, count));
+                }
             }
             Console.WriteLine("BENCH image-bytes=" + png.Length);
             Console.WriteLine("BENCH version=" + typeof(PopupWindow).Assembly.GetName().Version +
@@ -84,18 +147,51 @@ internal static partial class Program
                 store.Capture(ClipPayload.FromText($"benchmark new capture {i}"));
                 Measure("capture-refresh", popup.HistoryChanged);
             }
-            // Different row counts are intentional: v0.2.1 Pinned includes
-            // unpinned recent history, while the released view did not.
             Measure("pinned-view", () => Click(pinned));
-            // The released v0.2.0 source has no quick panel. Find by name so
-            // the identical benchmark source still builds against that tag.
-            if (popup.FindName("QuickModeButton") is Button quick)
+            popup.HidePopup();
+            Idle("hidden");
+            Motion("hidden");
+            Measure("reopen-pinned", Open);
+            Idle("ordinary");
+            var quick = (Button)popup.FindName("QuickModeButton");
+            Measure("quick-open", () => Click(quick));
+            for (var i = 0; i < 5; i++)
             {
-                Measure("quick-open", () => Click(quick));
+                // All pins match the content query; the selective query also
+                // exercises actual changes to the realized row collection.
                 Measure("quick-search", () => search.Text = "benchmark");
+                Measure("quick-selective-search", () => search.Text = "Title 1");
                 Measure("quick-clear", () => search.Text = "");
-                Measure("quick-return", () => Click(quick));
             }
+            Idle("quick-expanded");
+            Motion("quick-expanded");
+            // The stable baseline predates floating mode. The common
+            // workload stays identical; only the new states are conditional.
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var collapse = typeof(PopupWindow).GetMethod("CollapseQuickPanel", flags);
+            var expand = typeof(PopupWindow).GetMethod("OpenFloatingPanel", flags);
+            if (collapse is not null && expand is not null)
+            {
+                // The actual pointer/hotkey gestures have separate smoke
+                // coverage. Here time just the state transition and layout.
+                for (var i = 0; i < 10; i++)
+                {
+                    Measure("floating-collapse", () => collapse.Invoke(popup, null), false);
+                    if (i == 0)
+                    {
+                        Idle("floating-collapsed");
+                        Motion("floating-collapsed");
+                    }
+                    Measure("floating-expand", () => expand.Invoke(popup, null));
+                }
+                Idle("quick-after-cycles");
+                Measure("floating-collapse-final", () => collapse.Invoke(popup, null), false);
+                Idle("floating-after-cycles");
+                Measure("floating-expand-final", () => expand.Invoke(popup, null));
+            }
+            Measure("quick-return", () => Click(quick));
+            popup.HidePopup();
+            Idle("hidden-after-quick");
             return 0;
         }
         finally

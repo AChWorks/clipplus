@@ -1,0 +1,36 @@
+<Window x:Class="ClipPlus.FloatingIconWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ClipPlus floating clipboard"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False" ShowActivated="False"
+        WindowStartupLocation="Manual" Topmost="True" UseLayoutRounding="True">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Assets/ClipPlusIcon.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Button x:Name="FloatingButton" Focusable="False" Cursor="Hand"
+            AutomationProperties.Name="Open pinned clipboard"
+            ToolTip="Click to open; drag to move"
+            Background="{DynamicResource FloatingIdleBrush}"
+            BorderBrush="{DynamicResource FloatingBorderBrush}" BorderThickness="1">
+        <Button.Template>
+            <ControlTemplate TargetType="Button">
+                <Border x:Name="Surface" CornerRadius="11" Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                    <Image Source="{StaticResource ClipPlusHeaderIcon}" Width="28" Height="28"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Surface" Property="Background" Value="{DynamicResource FloatingHoverBrush}"/>
+                        <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FloatingFocusBrush}"/>
+                    </Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate>
+        </Button.Template>
+    </Button>
+</Window>

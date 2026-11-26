@@ -5,7 +5,8 @@ param([Parameter(Mandatory)][string]$Setup,[Parameter(Mandatory)][string]$Portab
       [Parameter(Mandatory)][string]$LegacySetup,
       [Parameter(Mandatory)][string]$PreviousSetup,
       [Parameter(Mandatory)][string]$StableSetup,
-      [Parameter(Mandatory)][string]$QuickSetup)
+      [Parameter(Mandatory)][string]$QuickSetup,
+      [Parameter(Mandatory)][string]$WidthSetup)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -37,6 +38,11 @@ $quickFile = (Get-Item -LiteralPath $QuickSetup).FullName
 $quickExeHash = 'E99C263B4B9D1A64A5E1900D44D3B7959893A3E0F36DFF42976705571D71CEF7'
 if ((Get-FileHash -LiteralPath $quickFile -Algorithm SHA256).Hash -ne '4B86FD12BEA66DD11D37323715EEA4F4F0C7E734596142E53D3BA1DF69519261') {
     throw 'Released v0.2.2 installer checksum mismatch.'
+}
+$widthFile = (Get-Item -LiteralPath $WidthSetup).FullName
+$widthExeHash = 'AFF8ADADA7BB93C44E2EAB15729D8F4DBF6211A9FEEBD38D70BD10C0AB694099'
+if ((Get-FileHash -LiteralPath $widthFile -Algorithm SHA256).Hash -ne '7ECA888EF7FC484AFD2D59CF37BE32FA02649B4B8EEC58C2BEFA810DBE76D29B') {
+    throw 'Released v0.2.3 installer checksum mismatch.'
 }
 $legacySetupHash = '587266B81DB63244C54DE969832B59C02BE18FD83D4CBC6335D9530E89408D83'
 $legacyExeHash = '36C6BCB7EFDE4E50BA6E5D489781C5B24223F9A0B9DC4B632E32F21C304416C0'
@@ -939,21 +945,26 @@ try {
     # Exercise released versions with the current per-user shortcut format.
     # Their installers are unmodified; an old helper failure is visible, not retried away.
     foreach ($release in @(
-        @{Version='v0.2.1'; Setup=$stableFile; ExeHash=$stableExeHash; Quick=$false},
-        @{Version='v0.2.2'; Setup=$quickFile; ExeHash=$quickExeHash; Quick=$true}
+        @{Version='v0.2.1'; Setup=$stableFile; ExeHash=$stableExeHash; Geometry='ordinary'},
+        @{Version='v0.2.2'; Setup=$quickFile; ExeHash=$quickExeHash; Geometry='quick'},
+        @{Version='v0.2.3'; Setup=$widthFile; ExeHash=$widthExeHash; Geometry='width'}
     )) {
         & $testExe --isolated-desktop --empty-fixture-clipboard
         if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }
         Invoke-Wizard $release.Setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
         $installed = $true
-        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $release.ExeHash -or
-            -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
+        $actualExeHash = (Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash
+        if ($actualExeHash -ne $release.ExeHash) {
+            throw "Installed $($release.Version) executable checksum mismatch: expected $($release.ExeHash), actual $actualExeHash."
+        }
+        if (-not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
             (Test-Path -LiteralPath $context.LegacyShortcut)) {
-            throw "Expected exact released $($release.Version) and its user shortcut."
+            throw "Expected released $($release.Version) to own its per-user shortcut, not a legacy shortcut."
         }
         Stop-ClipPlus $context
         $seedArgs = @('--isolated-desktop','--seed-v020-profile')
-        if ($release.Quick) { $seedArgs += '--with-quick-geometry' }
+        if ($release.Geometry -eq 'quick') { $seedArgs += '--with-quick-geometry' }
+        if ($release.Geometry -eq 'width') { $seedArgs += '--with-width-geometry' }
         & $testExe @seedArgs --database $database --profile administrator
         if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable protected profile.' }
         & $testExe @seedArgs --database $normalDb --profile normal
