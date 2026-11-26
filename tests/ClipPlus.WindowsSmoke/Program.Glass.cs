@@ -35,13 +35,19 @@ internal static partial class Program
         var center = button.PointToScreen(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
         try
         {
+            // Override only this window's dynamic system resource. This
+            // exercises WPF's live resource invalidation path without changing
+            // the runner's actual accessibility settings.
+            icon.Resources[SystemParameters.HighContrastKey] = false;
+            Check(icon.ReadLocalValue(FloatingIconWindow.SystemHighContrastProperty) != DependencyProperty.UnsetValue,
+                "visible icon tracks the native system contrast resource");
             // Test the selected production silhouette rather than shipping or
             // dynamically switching between the discarded design alternatives.
             foreach (var theme in new[] { (Dark: false, Name: "light"), (Dark: true, Name: "dark") })
             {
                 Move(outsideX, outsideY);
                 InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
-                icon.ApplyTheme(theme.Dark, false);
+                icon.ApplyTheme(theme.Dark);
                 icon.UpdateLayout();
                 var surface = (System.Windows.Shapes.Ellipse)button.Template.FindName("Surface", button);
                 Check(surface.Stroke is null && button.BorderThickness == new Thickness(0),
@@ -102,16 +108,49 @@ internal static partial class Program
                 SaveImageEvidence(comparison, "quick-glass-preview-" + theme.Name);
             }
 
-            icon.ApplyTheme(false, true);
-            InstalledFlow.Pump(TimeSpan.FromMilliseconds(1200));
-            Check(button.Opacity == 1, "high contrast icon remains fully visible while idle");
-            Check(button.Background is SolidColorBrush fill && fill.Color == SystemColors.HighlightColor &&
-                button.Foreground is SolidColorBrush glyph && glyph.Color == SystemColors.HighlightTextColor,
-                "high contrast uses the system highlight and matching text brush without a border");
+            // The last iteration has already faded to idle. Change the live
+            // resource, not the ApplyTheme method, to exercise the production
+            // accessibility notification and cancellation path.
+            void VerifyContrast(string state)
+            {
+                PumpUntil(() => button.Opacity == 1 && button.Background is SolidColorBrush);
+                Check(button.Opacity == 1 &&
+                    !DependencyPropertyHelper.GetValueSource(button, UIElement.OpacityProperty).IsAnimated &&
+                    button.Background is SolidColorBrush fill && fill.Color == SystemColors.HighlightColor &&
+                    button.Foreground is SolidColorBrush glyph && glyph.Color == SystemColors.HighlightTextColor,
+                    state + ": live contrast cancels fade and restores opaque system colors");
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(1200));
+                Check(button.Opacity == 1, state + ": contrast icon remains fully visible beyond the idle delay");
+            }
+            icon.Resources[SystemParameters.HighContrastKey] = true;
+            VerifyContrast("already-dimmed icon");
+            icon.Resources[SystemParameters.HighContrastKey] = false;
+            PumpUntil(() => button.Background is LinearGradientBrush);
+            Check(button.Background is LinearGradientBrush && button.Opacity == 1,
+                "leaving contrast restores the ordinary presentation and starts a fresh idle delay");
+
+            if (SystemParameters.ClientAreaAnimation)
+            {
+                PumpUntil(() => button.Opacity < 1 && button.Opacity > FloatingIconWindow.IdleOpacity);
+                Check(button.Opacity < 1 && button.Opacity > FloatingIconWindow.IdleOpacity,
+                    "ordinary fade is in progress before live contrast change");
+                icon.Resources[SystemParameters.HighContrastKey] = true;
+                VerifyContrast("active fade");
+                icon.Resources[SystemParameters.HighContrastKey] = false;
+            }
+            else
+            {
+                Console.WriteLine("INFO: client-area animations disabled by Windows; active fade transition not applicable.");
+            }
+            PumpUntil(() => Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001);
+            Check(button.Background is LinearGradientBrush &&
+                Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001,
+                "leaving contrast restores the ordinary delayed idle opacity");
         }
         finally
         {
-            icon.ApplyTheme(false, false);
+            icon.Resources.Remove(SystemParameters.HighContrastKey);
+            icon.ApplyTheme(false);
             Move(outsideX, outsideY);
         }
     }

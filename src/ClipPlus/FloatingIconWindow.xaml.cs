@@ -1,5 +1,6 @@
 using System;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -13,7 +14,18 @@ public partial class FloatingIconWindow : Window
     internal const double IconSize = 42;
     internal const double IdleOpacity = 0.45;
     private readonly DispatcherTimer _fadeDelay = new() { Interval = TimeSpan.FromMilliseconds(850) };
-    private bool _highContrast;
+    // A native dynamic system resource, attached only while visible.
+    // WPF invalidates it on accessibility changes without a static event
+    // retaining the window or another worker observing system settings.
+    internal static readonly DependencyProperty SystemHighContrastProperty =
+        DependencyProperty.Register("SystemHighContrast", typeof(bool), typeof(FloatingIconWindow),
+            new PropertyMetadata(false, (owner, _) =>
+            {
+                var icon = (FloatingIconWindow)owner;
+                if (icon.IsVisible) icon.RefreshTheme();
+            }));
+    private bool HighContrast => (bool)GetValue(SystemHighContrastProperty);
+    private bool _dark;
     private readonly Action _open;
     private readonly Action<Native.Point> _moved;
     private readonly Action<string, Exception?> _report;
@@ -33,7 +45,7 @@ public partial class FloatingIconWindow : Window
         _fadeDelay.Tick += (_, _) =>
         {
             _fadeDelay.Stop();
-            if (!IsVisible || _moving || FloatingButton.IsMouseOver || _highContrast) return;
+            if (!IsVisible || _moving || FloatingButton.IsMouseOver || HighContrast) return;
             var from = FloatingButton.Opacity;
             FloatingButton.Opacity = IdleOpacity;
             if (SystemParameters.ClientAreaAnimation)
@@ -44,10 +56,14 @@ public partial class FloatingIconWindow : Window
         FloatingButton.MouseLeave += (_, _) => ScheduleFade();
         IsVisibleChanged += (_, _) =>
         {
-            ShowClearly();
-            if (IsVisible) ScheduleFade();
+            if (IsVisible)
+            {
+                SetResourceReference(SystemHighContrastProperty, SystemParameters.HighContrastKey);
+                RefreshTheme();
+            }
+            else StopAppearanceTracking();
         };
-        Closed += (_, _) => ShowClearly();
+        Closed += (_, _) => StopAppearanceTracking();
         SourceInitialized += (_, _) =>
         {
             Native.SetNoActivate(Handle, true);
@@ -140,20 +156,41 @@ public partial class FloatingIconWindow : Window
     private void ScheduleFade()
     {
         _fadeDelay.Stop();
-        if (IsVisible && !_moving && !FloatingButton.IsMouseOver && !_highContrast &&
+        if (IsVisible && !_moving && !FloatingButton.IsMouseOver && !HighContrast &&
             FloatingButton.Opacity > IdleOpacity)
             _fadeDelay.Start();
     }
 
-    internal void ApplyTheme(bool dark, bool highContrast)
+    private void StopAppearanceTracking()
     {
-        _highContrast = highContrast;
-        Resources["FloatingSurfaceBrush"] = highContrast ? SystemColors.HighlightBrush :
-            new LinearGradientBrush((Color)ColorConverter.ConvertFromString(dark ? "#497FF5" : "#4A82F9"),
-                (Color)ColorConverter.ConvertFromString(dark ? "#2159CF" : "#245ADE"), 90);
-        Resources["FloatingGlyphBrush"] = highContrast ? SystemColors.HighlightTextBrush : Brushes.White;
+        ClearValue(SystemHighContrastProperty);
+        FloatingButton.ClearValue(Control.BackgroundProperty);
+        FloatingButton.ClearValue(Control.ForegroundProperty);
         ShowClearly();
-        ScheduleFade();
+    }
+
+    internal void ApplyTheme(bool dark)
+    {
+        _dark = dark;
+        if (IsVisible) RefreshTheme();
+    }
+
+    private void RefreshTheme()
+    {
+        ShowClearly(); // Cancels an active fade before applying contrast colors.
+        if (HighContrast)
+        {
+            // Keep the system palette live even between two contrast themes.
+            FloatingButton.SetResourceReference(Control.BackgroundProperty, SystemColors.HighlightBrushKey);
+            FloatingButton.SetResourceReference(Control.ForegroundProperty, SystemColors.HighlightTextBrushKey);
+        }
+        else
+        {
+            FloatingButton.Background = new LinearGradientBrush((Color)ColorConverter.ConvertFromString(_dark ? "#497FF5" : "#4A82F9"),
+                (Color)ColorConverter.ConvertFromString(_dark ? "#2159CF" : "#245ADE"), 90);
+            FloatingButton.Foreground = Brushes.White;
+            ScheduleFade();
+        }
     }
 
     internal Native.Point ShowAt(Native.Point anchor)

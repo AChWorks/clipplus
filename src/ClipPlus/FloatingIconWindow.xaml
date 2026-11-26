@@ -15,8 +15,7 @@
     <Button x:Name="FloatingButton" Focusable="False" Cursor="Hand"
             AutomationProperties.Name="Open pinned clipboard"
             ToolTip="Click to open; drag to move"
-            Background="{DynamicResource FloatingSurfaceBrush}"
-            Foreground="{DynamicResource FloatingGlyphBrush}" BorderThickness="0" Padding="0">
+            BorderThickness="0" Padding="0">
         <Button.Template>
             <ControlTemplate TargetType="Button">
                 <!-- One borderless circular alpha surface, with the canonical
