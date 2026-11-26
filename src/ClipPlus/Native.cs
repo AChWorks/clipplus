@@ -10,6 +10,7 @@ internal static class Native
     internal const int WmHotkey = 0x0312;
     internal const int WmOpenPopup = 0x8001;
     internal const int WmShortcutFault = 0x8002;
+    internal const int WmOutsideQuickClick = 0x8003;
     internal const int VkV = 0x56;
     internal const int VkControl = 0x11, VkShift = 0x10, VkAlt = 0x12;
     internal const int VkLWin = 0x5B, VkRWin = 0x5C;

@@ -45,6 +45,8 @@ public sealed class CategoryTests
             var original = Preferences.Load(path);
             Assert.Equal(new PopupGeometry(360, 650, new WindowPosition(-400, 50)), original.Geometry(false));
             Assert.Equal(new PopupGeometry(260, 420, null), original.Geometry(true));
+            Assert.True(original.AutoCollapseQuickPanel);
+            Assert.Null(original.FloatingPosition);
 
             // Existing v0.2.2 settings already contain independent quick
             // geometry, but do not yet contain WindowWidth.
@@ -59,7 +61,10 @@ public sealed class CategoryTests
             var quick = new PopupGeometry(180, 350, new WindowPosition(140, 40));
             var normalOnly = previous.WithGeometry(normal, false);
             Assert.Equal(previous.Geometry(true), normalOnly.Geometry(true));
-            var updated = normalOnly.WithGeometry(quick, true);
+            var updated = normalOnly.WithGeometry(quick, true) with
+            {
+                AutoCollapseQuickPanel = false, FloatingPosition = new WindowPosition(-120, 800)
+            };
             Assert.Equal(normal, updated.Geometry(false));
             Assert.Equal(quick, updated.Geometry(true));
             Assert.Equal(previous.CompactView, updated.CompactView);

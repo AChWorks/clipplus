@@ -49,10 +49,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v020.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v023.txt
+            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v024.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             if (-not (Select-String -Path TestResults/performance-v020.txt -Pattern 'BENCH first-open-recent') -or
-                -not (Select-String -Path TestResults/performance-v023.txt -Pattern 'BENCH first-open-recent')) {
+                -not (Select-String -Path TestResults/performance-v024.txt -Pattern 'BENCH first-open-recent')) {
               throw 'Interactive WPF benchmark did not run.'
             }
           } finally { git worktree remove --force $baseline }

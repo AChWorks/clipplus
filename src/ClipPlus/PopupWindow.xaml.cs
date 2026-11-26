@@ -28,6 +28,7 @@ public partial class PopupWindow : Window
     private readonly Action<long, bool> _saveView;
     private readonly Func<long, Native.PasteTarget?, Task<bool>>? _quickPaste;
     private readonly HwndSourceHook _windowHook;
+    private readonly Action<WindowPosition>? _saveFloatingPosition;
     private readonly Dictionary<long, Row> _rows = new();
     private ObservableCollection<HistoryEntry> _entries = new();
     // Include visual metadata so renaming a category or switching compact
@@ -68,7 +69,8 @@ public partial class PopupWindow : Window
 
     internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<PopupGeometry, bool> saveGeometry,
         Action<string, Exception?> report, Func<Preferences> preferences, Action<long, bool> saveView,
-        Func<long, Native.PasteTarget?, Task<bool>>? quickPaste = null)
+        Func<long, Native.PasteTarget?, Task<bool>>? quickPaste = null,
+        Action<WindowPosition>? saveFloatingPosition = null)
     {
         _store = store;
         _paste = paste;
@@ -77,6 +79,7 @@ public partial class PopupWindow : Window
         _preferences = preferences;
         _saveView = saveView;
         _quickPaste = quickPaste;
+        _saveFloatingPosition = saveFloatingPosition;
         // Keep the hook rooted for the entire HWND lifetime.
         _windowHook = OnWindowMessage;
         InitializeComponent();
@@ -133,6 +136,8 @@ public partial class PopupWindow : Window
         InputManager.Current.PostProcessInput += OnPostProcessInput;
         Closed += (_, _) =>
         {
+            EndFloatingSession();
+            _floatingIcon?.Close();
             CancelPaletteHover();
             _paletteTimer.Stop();
             InputManager.Current.PostProcessInput -= OnPostProcessInput;
@@ -171,6 +176,19 @@ public partial class PopupWindow : Window
 
     private nint OnWindowMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
+        if (message == Native.WmOutsideQuickClick)
+        {
+            handled = true;
+            // Let the external mouse-up finish dispatching before a new
+            // topmost surface can appear at the remembered anchor.
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                if (_outsideClick is not null && wParam == _outsideClickGeneration &&
+                    IsQuickMode && IsVisible && !_placing && !_inMoveSize && _preferences().AutoCollapseQuickPanel)
+                    Run(CollapseQuickPanel);
+            }));
+            return 0;
+        }
         if (IsQuickMode && message == 0x0021) // WM_MOUSEACTIVATE
         {
             // Deliver the mouse gesture without activating. The search box
@@ -255,6 +273,7 @@ public partial class PopupWindow : Window
             var monitor = Native.MonitorFromPoint(anchor, 2);
             var hwnd = new WindowInteropHelper(this).EnsureHandle();
             PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null, preferences.WindowWidth);
+            ShowActivated = true;
             Show();
             RevealActiveCategory();
             PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null, preferences.WindowWidth);
@@ -274,7 +293,7 @@ public partial class PopupWindow : Window
         finally { _placing = false; }
     }
 
-    private static double MonitorScale(nint monitor) =>
+    internal static double MonitorScale(nint monitor) =>
         Native.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 && dpiX > 0 ? dpiX / 96.0 : 1.0;
 
     // Keep the original initial widths; each mode can be narrowed by 100 DIP.
@@ -292,20 +311,34 @@ public partial class PopupWindow : Window
         var available = work.Bottom - work.Top;
         var height = Math.Min(available, (int)Math.Round(Clamp(preferredHeight,
             Math.Min(quick ? 150 : 240, available / scale), available / scale) * scale));
-        var x = Clamp(anchor.X, work.Left, work.Right - width);
         var y = !contextual || (long)anchor.Y + height <= work.Bottom
             ? (long)anchor.Y : (long)anchor.Y - height;
-        var top = (int)Math.Max(work.Top, Math.Min(y, work.Bottom - height));
-        return new Native.Rect { Left = x, Top = top, Right = x + width, Bottom = top + height };
+        return ClampBounds(work, new Native.Point { X = anchor.X, Y = (int)Math.Max(int.MinValue, y) }, width, height);
     }
 
-    private Native.Point PlaceWindow(nint hwnd, nint monitor, Native.Point anchor, double preferredHeight, bool contextual, double preferredWidth)
+    // Shared physical-screen placement for both window sizes, including
+    // negative monitor coordinates and reserved taskbar work areas.
+    internal static Native.Rect ClampBounds(Native.Rect work, Native.Point anchor, int width, int height)
+    {
+        width = Math.Min(width, work.Right - work.Left);
+        height = Math.Min(height, work.Bottom - work.Top);
+        var x = Clamp(anchor.X, work.Left, work.Right - width);
+        var y = Clamp(anchor.Y, work.Top, work.Bottom - height);
+        return new Native.Rect { Left = x, Top = y, Right = x + width, Bottom = y + height };
+    }
+
+    internal static Native.Rect MonitorWorkArea(nint monitor)
     {
         var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
         if (monitor == 0 || !Native.GetMonitorInfo(monitor, ref info))
             throw Native.Error("GetMonitorInfo");
+        return info.Work;
+    }
+
+    private Native.Point PlaceWindow(nint hwnd, nint monitor, Native.Point anchor, double preferredHeight, bool contextual, double preferredWidth)
+    {
         var scale = MonitorScale(monitor);
-        var work = info.Work;
+        var work = MonitorWorkArea(monitor);
         var availableWidth = (work.Right - work.Left) / scale;
         var available = (work.Bottom - work.Top) / scale;
         MinWidth = 0;

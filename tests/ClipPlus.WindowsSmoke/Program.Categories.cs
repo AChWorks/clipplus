@@ -363,7 +363,7 @@ internal static partial class Program
             "edge-scrolled drag reaches previously hidden final category and persists intended order");
     }
 
-    private static void SavePopupEvidence(PopupWindow popup, string name)
+    private static void SavePopupEvidence(Window popup, string name)
     {
         popup.UpdateLayout();
         var dpi = VisualTreeHelper.GetDpi(popup);

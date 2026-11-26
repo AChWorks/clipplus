@@ -11,7 +11,7 @@ internal static partial class Program
     private static void VerifyQuickVisual()
     {
         using var store = new ClipStore(":memory:");
-        var preferences = new Preferences();
+        var preferences = new Preferences { AutoCollapseQuickPanel = false };
         long pasted = 0;
         var succeeded = false;
         var popup = new PopupWindow(store, _ => Task.CompletedTask,
@@ -87,8 +87,66 @@ internal static partial class Program
             search.Text = "match";
             popup.UpdateLayout();
             VerifyQuickSelection(popup, list, search);
+            VerifyFloatingVisual(popup, () => preferences, next => preferences = next);
         }
         finally { popup.HidePopup(); popup.Close(); }
+    }
+
+    private static void VerifyFloatingVisual(PopupWindow popup, Func<Preferences> get, Action<Preferences> set)
+    {
+        var targetButton = new Button { Content = "Outside click target" };
+        var clicks = 0;
+        targetButton.Click += (_, _) => clicks++;
+        var target = new Window { Title = "Synthetic floating target", Content = targetButton, Width = 180, Height = 100, ShowInTaskbar = false };
+        target.Show();
+        try
+        {
+            var targetHwnd = new System.Windows.Interop.WindowInteropHelper(target).Handle;
+            Check(Native.GetWindowRect(popup.Handle, out var panel), "read expanded panel bounds");
+            var monitor = Native.MonitorFromRect(ref panel, 2);
+            var work = PopupWindow.MonitorWorkArea(monitor);
+            var scale = PopupWindow.MonitorScale(monitor);
+            var width = (int)Math.Round(180 * scale);
+            var height = (int)Math.Round(100 * scale);
+            var x = panel.Left - work.Left >= width ? work.Left : work.Right - width;
+            var y = work.Top;
+            Check(Native.SetWindowPos(targetHwnd, 0, x, y, width, height, 0x0014), "place external test button");
+            target.Activate();
+            Native.SetForegroundWindow(targetHwnd);
+            PumpUntil(() => Native.GetForegroundWindow() == targetHwnd);
+            target.UpdateLayout();
+            var center = targetButton.PointToScreen(new Point(targetButton.ActualWidth / 2, targetButton.ActualHeight / 2));
+            Check(center.X < panel.Left || center.X >= panel.Right || center.Y < panel.Top || center.Y >= panel.Bottom, "outside test coordinate");
+            void ClickTarget()
+            {
+                Check(Native.SetCursorPos((int)center.X, (int)center.Y), "move to outside target button");
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(60));
+                InstalledFlow.SendMouse(0x0002);
+                try { InstalledFlow.Pump(TimeSpan.FromMilliseconds(80)); }
+                finally { InstalledFlow.SendMouse(0x0004); }
+            }
+            ClickTarget();
+            PumpUntil(() => clicks == 1);
+            Check(popup.IsVisible && popup.IsQuickMode, "always-expanded mode keeps panel open after an outside click");
+            set(get() with { AutoCollapseQuickPanel = true });
+            popup.QuickBehaviorChanged();
+            ClickTarget();
+            PumpUntil(() => clicks == 2 && !popup.IsVisible);
+            Check(Native.GetForegroundWindow() == targetHwnd, "outside click still reaches the target button exactly once");
+            var icon = Application.Current.Windows.OfType<FloatingIconWindow>().Single(w => w.IsVisible);
+            Check(popup.IsQuickMode && !popup.IsVisible && icon.IsVisible, "floating mode retains quick session");
+            foreach (var theme in new[] { (Dark: false, Contrast: false, Name: "light"), (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
+            {
+                icon.ApplyTheme(theme.Dark, theme.Contrast);
+                SavePopupEvidence(icon, "quick-floating-" + theme.Name);
+            }
+            set(get() with { AutoCollapseQuickPanel = false });
+            popup.QuickBehaviorChanged();
+            Check(popup.IsVisible && !icon.IsVisible && popup.IsQuickMode, "always-expanded setting restores the full panel");
+            popup.HidePopup();
+            Check(!icon.IsVisible && !popup.IsQuickMode, "closing the quick session hides all floating UI");
+        }
+        finally { target.Close(); }
     }
 
     private static void VerifyQuickSelection(PopupWindow popup, ListBox list, TextBox search)

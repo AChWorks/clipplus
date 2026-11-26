@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -67,6 +68,46 @@ internal static partial class InstalledFlow
         Pump(TimeSpan.FromMilliseconds(80));
         SendMouse(0x0004);
         Pump(TimeSpan.FromMilliseconds(100));
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindow(string? className, string title);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(nint hwnd);
+
+    private static nint VisibleIcon(nint popup)
+    {
+        var icon = FindWindow(null, "ClipPlus floating clipboard");
+        if (icon == 0 || !IsWindowVisible(icon)) return 0;
+        Native.GetWindowThreadProcessId(popup, out var owner);
+        Native.GetWindowThreadProcessId(icon, out var actual);
+        return owner == actual ? icon : 0;
+    }
+
+    private static nint RequireCollapsed(nint popup, nint target)
+    {
+        nint icon = 0;
+        Wait(() => (icon = VisibleIcon(popup)) != 0 && !IsWindowVisible(popup) &&
+            Native.GetForegroundWindow() == target, "outside click collapses to a passive icon without stealing focus");
+        var rect = Bounds(icon);
+        if (!Native.IsNoActivate(icon) ||
+            Math.Abs((rect.Right - rect.Left) / Scale(icon) - 42) > 2 ||
+            Math.Abs((rect.Bottom - rect.Top) / Scale(icon) - 42) > 2)
+            throw new InvalidOperationException("Floating icon does not have the expected native style or 42-DIP bounds.");
+        return icon;
+    }
+
+    private static void VerifyFloatingBounds(nint popup, Native.Point anchor, PopupGeometry geometry)
+    {
+        var monitor = Native.MonitorFromPoint(anchor, 2);
+        var expected = PopupWindow.FitBounds(PopupWindow.MonitorWorkArea(monitor), PopupWindow.MonitorScale(monitor),
+            anchor, geometry.Height, false, geometry.Width, true);
+        var actual = Bounds(popup);
+        if (Math.Abs(expected.Left - actual.Left) > 2 || Math.Abs(expected.Top - actual.Top) > 2 ||
+            Math.Abs(expected.Right - actual.Right) > 2 || Math.Abs(expected.Bottom - actual.Bottom) > 2)
+            throw new InvalidOperationException("Expanded panel does not fit the floating anchor's monitor work area.");
     }
 
     private static void QuickFocus(Window window, TextBox editor)
@@ -233,8 +274,40 @@ internal static partial class InstalledFlow
                     pid == (uint)other.Id;
             }, "independent second editor process opened");
             FocusOther();
-            Wait(() => QuickFind(popup, "Paste: " + title) is not null,
-                "outside click leaves quick panel visible");
+            var icon = RequireCollapsed(popup, otherHwnd);
+            var initialIcon = Bounds(icon);
+            // Move to the bottom-right work-area corner: the expanded panel
+            // must shift up/left while the icon stays exactly at its anchor.
+            var iconMonitor = Native.MonitorFromRect(ref initialIcon, 2);
+            var iconWork = PopupWindow.MonitorWorkArea(iconMonitor);
+            var iconWidth = initialIcon.Right - initialIcon.Left;
+            var iconHeight = initialIcon.Bottom - initialIcon.Top;
+            var endX = iconWork.Right - iconWidth / 2 - 2;
+            var endY = iconWork.Bottom - iconHeight / 2 - 2;
+            Drag(initialIcon.Left + iconWidth / 2, initialIcon.Top + iconHeight / 2, endX, endY);
+            Wait(() => VisibleIcon(popup) == icon && !IsWindowVisible(popup) &&
+                Native.GetForegroundWindow() == otherHwnd && Preferences.Load(settings).FloatingPosition is { } position &&
+                Math.Abs(position.X - (endX - iconWidth / 2)) <= 3 &&
+                Math.Abs(position.Y - (endY - iconHeight / 2)) <= 3,
+                "floating icon drag persists at work-area edge without opening or stealing focus");
+            var dragged = Bounds(icon);
+            var iconAnchor = new Native.Point { X = dragged.Left, Y = dragged.Top };
+            PointerClick(QuickRequire(icon, "Open pinned clipboard"));
+            Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 &&
+                Native.GetForegroundWindow() == otherHwnd && QuickFind(popup, "Paste: " + title) is not null,
+                "icon click opens pinned panel without activating it");
+            VerifyFloatingBounds(popup, iconAnchor, Preferences.Load(settings).QuickPanel);
+            // Click the already-foreground application. No Deactivated
+            // event can distinguish this case; the gesture must still work.
+            FocusOther();
+            icon = RequireCollapsed(popup, otherHwnd);
+            var returned = Bounds(icon);
+            if (returned.Left != dragged.Left || returned.Top != dragged.Top)
+                throw new InvalidOperationException("Automatic clamping moved the stored icon anchor.");
+            SendShortcut(shortcut);
+            Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 && Native.GetForegroundWindow() == otherHwnd,
+                "shortcut expands a collapsed quick panel without stealing focus");
+            VerifyFloatingBounds(popup, iconAnchor, Preferences.Load(settings).QuickPanel);
             PointerClick(QuickRequire(popup, "Paste: " + title));
             Wait(() => Native.GetForegroundWindow() == otherHwnd && OtherText() == original,
                 "title click pastes into newly active process without stealing focus");
@@ -249,6 +322,10 @@ internal static partial class InstalledFlow
             Wait(() => Native.GetForegroundWindow() == popup, "quick search reactivated");
             SetValue(QuickRequire(popup, "Search pinned clips"), "secondary");
             FocusOther();
+            icon = RequireCollapsed(popup, otherHwnd);
+            PointerClick(QuickRequire(icon, "Open pinned clipboard"));
+            Wait(() => IsWindowVisible(popup) && QuickQuery(popup) == "secondary" &&
+                Native.GetForegroundWindow() == otherHwnd, "collapse preserves query and reopens against current external target");
             var priorOther = OtherText();
             var priorFirst = editor.Text;
             if (!Native.OpenClipboard(hwnd)) throw Native.Error("Hold clipboard for quick cancellation");
@@ -287,7 +364,7 @@ internal static partial class InstalledFlow
                 Native.GetForegroundWindow() == hwnd, "quick header drag preserves foreground");
             var saved = Preferences.Load(settings);
             if (saved.Geometry(false) != normal.Geometry(false) ||
-                saved.QuickPanel.Position is null)
+                saved.QuickPanel.Position is null || saved.FloatingPosition != new WindowPosition(iconAnchor.X, iconAnchor.Y))
                 throw new InvalidOperationException("Quick panel changed ordinary geometry or did not persist position.");
             VerifyPopupGeometry(popup, saved.QuickPanel);
             PointerClick(QuickRequire(popup, "Return to clipboard history"));
@@ -331,7 +408,9 @@ internal static partial class InstalledFlow
         PointerClick(QuickRequire(popup, "Open pinned quick-paste panel"));
         Wait(() => Native.GetForegroundWindow() == target && QuickFind(popup, "Search pinned clips") is not null,
             "restarted application enters quick mode only on explicit toggle");
-        VerifyPopupGeometry(popup, preferences.QuickPanel);
+        if (preferences.FloatingPosition is not { } position)
+            throw new InvalidOperationException("No persisted floating icon position after restart.");
+        VerifyFloatingBounds(popup, new Native.Point { X = position.X, Y = position.Y }, preferences.QuickPanel);
         PointerClick(QuickRequire(popup, "Return to clipboard history"));
         Wait(() => Native.GetForegroundWindow() == popup && QuickFind(popup, "Search clipboard") is not null,
             "restarted application restores independent normal geometry");

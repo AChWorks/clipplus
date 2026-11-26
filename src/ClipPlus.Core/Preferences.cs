@@ -21,6 +21,8 @@ public sealed record Preferences
     public WindowPosition? WindowPosition { get; init; }
     public Shortcut Shortcut { get; init; } = Shortcut.WinV;
     public PopupGeometry QuickPanel { get; init; } = new(DefaultQuickWidth, 420, null);
+    public bool AutoCollapseQuickPanel { get; init; } = true;
+    public WindowPosition? FloatingPosition { get; init; }
     public bool CompactView { get; init; }
     public long? ActiveView { get; init; }
     public double WindowWidth { get; init; } = DefaultNormalWidth;

@@ -97,8 +97,10 @@ public partial class PopupWindow
             NormalTarget = null;
             SetQuickAppearance(true);
             SearchBox.Text = "";
-            var geometry = _preferences().QuickPanel;
-            var origin = geometry.Position is { } saved
+            var quickPreferences = _preferences();
+            var geometry = quickPreferences.QuickPanel;
+            var quickPosition = quickPreferences.AutoCollapseQuickPanel ? quickPreferences.FloatingPosition ?? geometry.Position : geometry.Position;
+            var origin = quickPosition is { } saved
                 ? new Native.Point { X = saved.X, Y = saved.Y } : _normalOrigin;
             PlaceWindow(hwnd, Native.MonitorFromPoint(origin, 2), origin, geometry.Height, false, geometry.Width);
             Refresh(false);
@@ -111,6 +113,7 @@ public partial class PopupWindow
                 // explicitly. Do not retain a stale target for future clicks.
                 Native.SetForegroundWindow(target.Handle);
             }
+            UpdateOutsideClickMonitor();
         }
         finally { _placing = false; }
     }
@@ -121,6 +124,7 @@ public partial class PopupWindow
         _placing = true;
         try
         {
+            EndFloatingSession();
             _searchTarget = null;
             SetQuickAppearance(false);
             SearchBox.Text = _normalSearch;
@@ -229,7 +233,7 @@ public partial class PopupWindow
         _quickPasting = true;
         try
         {
-            if (await _quickPaste(id, target) && IsQuickMode && IsVisible)
+            if (await _quickPaste(id, target) && IsQuickMode)
             {
                 // Do not call FocusSearch, Activate or any keyboard-focus
                 // operation here. TextChanged only refreshes the pin list.
