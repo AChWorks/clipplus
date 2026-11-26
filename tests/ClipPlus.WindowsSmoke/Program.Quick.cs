@@ -207,9 +207,18 @@ internal static partial class Program
             popup.OpenFloatingPanel();
             Check(popup.IsVisible && !icon.IsVisible && ReferenceEquals(source, list.ItemsSource) && search.Text == query,
                 "collapsed session reopens with the existing filtered view");
+            // Inject the notification imbalance independently of the actual
+            // Windows move loop. A stale application-side tracking flag must
+            // not suppress a real outside gesture when no native move is active.
+            Check(Native.PostMessage(popup.Handle, 0x0231, 0, 0), "inject unmatched WM_ENTERSIZEMOVE");
+            InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
+            var gui = new Native.GuiThreadInfo { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.GuiThreadInfo>() };
+            Check(Native.GetGUIThreadInfo(Native.GetWindowThreadProcessId(popup.Handle, out _), ref gui) &&
+                (gui.Flags & 2) == 0 && gui.MoveSize == 0, "injected notification did not enter a real Windows move/size loop");
             ClickTarget();
             PumpUntil(() => clicks == 5 && icon.IsVisible);
-            Check(clicks == 5 && icon.IsVisible && !popup.IsVisible, "collapse again before explicit history invalidation");
+            Check(clicks == 5 && icon.IsVisible && !popup.IsVisible,
+                "stale move/size notification cannot suppress outside collapse after reopening");
             store.SetTitle(pin, "Match updated while hidden");
             popup.HistoryChanged();
             popup.OpenFloatingPanel();
