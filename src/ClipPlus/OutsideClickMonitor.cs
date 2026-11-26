@@ -5,8 +5,11 @@ using System.Threading;
 namespace ClipPlus;
 
 // The panel is normally non-activating, so Deactivated cannot detect a
-// click in the already-active application. Observe button gestures only
-// during an expanded floating session, on a dedicated native message pump.
+// click in the already-active application. The low-level hook supplies
+// button-event screen coordinates (also for injected mouse input), which a
+// deferred cursor-position sample from raw input cannot reliably recover.
+// Observe gestures only during an expanded floating session, on a dedicated
+// native message pump, and immediately pass motion and all other input on.
 // Never suppress input, inspect clipboard content or record pointer history.
 internal sealed class OutsideClickMonitor : IDisposable
 {

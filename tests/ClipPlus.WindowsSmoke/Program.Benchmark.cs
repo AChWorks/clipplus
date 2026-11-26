@@ -101,21 +101,34 @@ internal static partial class Program
                 if (!Native.GetMonitorInfo(monitor, ref info)) throw Native.Error("Benchmark monitor bounds");
                 var x = bounds.Left - info.Work.Left > 10 ? info.Work.Left + 3 : info.Work.Right - 5;
                 var y = bounds.Top - info.Work.Top > 10 ? info.Work.Top + 3 : info.Work.Bottom - 3;
+                const int count = 256;
+                var moves = Enumerable.Range(0, count).Select(i => new Native.Input
+                {
+                    Type = 0,
+                    Data = new Native.InputData { Mouse = new Native.MouseInput
+                        { X = i % 2 == 0 ? 1 : -1, Flags = 0x2001 } } // MOVE | MOVE_NOCOALESCE
+                }).ToArray();
+                var inputSize = Marshal.SizeOf<Native.Input>();
                 for (var sample = 0; sample < 3; sample++)
                 {
+                    if (!Native.SetCursorPos(x, y)) throw Native.Error("Benchmark pointer position");
+                    InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
                     using var process = Process.GetCurrentProcess();
                     var before = process.TotalProcessorTime;
                     var clock = Stopwatch.StartNew();
-                    for (var i = 0; i < 256; i++)
-                    {
-                        if (!Native.SetCursorPos(x + i % 2, y)) throw Native.Error("Benchmark pointer motion");
-                    }
+                    // SendInput actually inserts native mouse events, rather
+                    // than just changing the cursor position via SetCursorPos.
+                    if (Native.SendInput((uint)count, moves, inputSize) != count)
+                        throw Native.Error("Benchmark native pointer input");
                     popup.Dispatcher.Invoke(DispatcherPriority.ApplicationIdle, new Action(() => { }));
                     clock.Stop();
+                    // Allow queued input/observer work to settle before taking
+                    // the CPU sample, without including this wait in ms.
+                    InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
                     process.Refresh();
                     Console.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                        "BENCH motion-{0} ms={1:F2} cpuMs={2:F2} moves=256", name, clock.Elapsed.TotalMilliseconds,
-                        (process.TotalProcessorTime - before).TotalMilliseconds));
+                        "BENCH motion-{0} ms={1:F2} cpuMs={2:F2} moves={3}", name, clock.Elapsed.TotalMilliseconds,
+                        (process.TotalProcessorTime - before).TotalMilliseconds, count));
                 }
             }
             Console.WriteLine("BENCH image-bytes=" + png.Length);
