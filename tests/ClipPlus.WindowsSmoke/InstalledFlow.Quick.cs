@@ -347,8 +347,43 @@ internal static partial class InstalledFlow
             Console.WriteLine("PASS: clipboard contention and foreground change cancel quick paste and retain search");
 
             // Resize and drag with actual native pointer input while the
-            // external target remains foreground. Check independent settings.
-            ResizeHorizontal(popup, settings, true, hwnd);
+            // external target remains foreground. Close/reopen after every
+            // gesture, including the already-foreground outside-click case
+            // that previously went untested.
+            var reopenByShortcut = false;
+            void CollapseAfterGeometry(string operation)
+            {
+                var geometry = Preferences.Load(settings);
+                var query = QuickQuery(popup);
+                if (!IsWindowVisible(popup) || VisibleIcon(popup) != 0 ||
+                    Native.GetForegroundWindow() != hwnd)
+                    throw new InvalidOperationException(operation + " prematurely collapsed or activated the panel.");
+                var panel = Bounds(popup);
+                var targetBounds = Bounds(hwnd);
+                var point = new[] { 0.5, 0.25, 0.75 }.SelectMany(y => new[] { 0.5, 0.25, 0.75 }
+                    .Select(x => (X: targetBounds.Left + (int)((targetBounds.Right - targetBounds.Left) * x),
+                        Y: targetBounds.Top + (int)((targetBounds.Bottom - targetBounds.Top) * y))))
+                    .First(p => p.X < panel.Left || p.X >= panel.Right || p.Y < panel.Top || p.Y >= panel.Bottom);
+                ClickAt(point.X, point.Y);
+                var collapsed = RequireCollapsed(popup, hwnd);
+                var actualAnchor = Bounds(collapsed);
+                if (actualAnchor.Left != iconAnchor.X || actualAnchor.Top != iconAnchor.Y)
+                    throw new InvalidOperationException(operation + " changed the independent floating anchor.");
+                if (reopenByShortcut) SendShortcut(shortcut);
+                else PointerClick(QuickRequire(collapsed, "Open pinned clipboard"));
+                reopenByShortcut = !reopenByShortcut;
+                Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 &&
+                    Native.GetForegroundWindow() == hwnd && QuickQuery(popup) == query,
+                    operation + ": first outside click collapses, then reopen preserves query and foreground");
+                VerifyFloatingBounds(popup, iconAnchor, geometry.QuickPanel);
+                var reopened = Preferences.Load(settings);
+                if (reopened.Geometry(false) != normal.Geometry(false) ||
+                    reopened.QuickPanel != geometry.QuickPanel ||
+                    reopened.FloatingPosition != geometry.FloatingPosition)
+                    throw new InvalidOperationException(operation + " lost preferred geometry after collapse/reopen.");
+            }
+
+            ResizeHorizontal(popup, settings, true, hwnd, CollapseAfterGeometry);
             var before = Bounds(popup);
             var scale = Scale(popup);
             var inset = Math.Max(2, (int)Math.Round(3 * scale));
@@ -356,6 +391,26 @@ internal static partial class InstalledFlow
                 (before.Left + before.Right) / 2, before.Bottom - inset - (int)Math.Round(50 * scale));
             Wait(() => Math.Abs(Preferences.Load(settings).QuickPanel.Height - normal.QuickPanel.Height) > 10 &&
                 Native.GetForegroundWindow() == hwnd, "quick vertical resize persists without stealing focus");
+            CollapseAfterGeometry("vertical shrink");
+            before = Bounds(popup);
+            // The top-left resize corner lies inside the rounded surface
+            // and the existing native 6-DIP resize border.
+            var cornerInset = (int)Math.Round(5 * scale);
+            var cornerDelta = (int)Math.Round(25 * scale);
+            var diagonalBefore = Preferences.Load(settings).QuickPanel;
+            Drag(before.Left + cornerInset, before.Top + cornerInset,
+                before.Left + cornerInset + cornerDelta, before.Top + cornerInset + cornerDelta);
+            Wait(() => Math.Abs(Preferences.Load(settings).QuickPanel.Width - diagonalBefore.Width) > 10 &&
+                Math.Abs(Preferences.Load(settings).QuickPanel.Height - diagonalBefore.Height) > 10 &&
+                Native.GetForegroundWindow() == hwnd, "quick diagonal resize persists both dimensions without stealing focus");
+            CollapseAfterGeometry("diagonal shrink");
+            before = Bounds(popup);
+            var unchanged = Preferences.Load(settings).QuickPanel;
+            Drag(before.Right - inset, (before.Top + before.Bottom) / 2,
+                before.Right - inset, (before.Top + before.Bottom) / 2);
+            if (Preferences.Load(settings).QuickPanel != unchanged)
+                throw new InvalidOperationException("No-op native resize altered saved geometry.");
+            CollapseAfterGeometry("no-op resize");
             before = Bounds(popup);
             var center = new Native.Point { X = (before.Left + before.Right) / 2, Y = (before.Top + before.Bottom) / 2 };
             var monitor = Native.MonitorFromPoint(center, 2);
@@ -372,6 +427,7 @@ internal static partial class InstalledFlow
                 saved.QuickPanel.Position is null || saved.FloatingPosition != new WindowPosition(iconAnchor.X, iconAnchor.Y))
                 throw new InvalidOperationException("Quick panel changed ordinary geometry or did not persist position.");
             VerifyPopupGeometry(popup, saved.QuickPanel);
+            CollapseAfterGeometry("header drag");
             PointerClick(QuickRequire(popup, "Return to clipboard history"));
             Wait(() => Native.GetForegroundWindow() == popup && !Native.IsNoActivate(popup) && QuickFind(popup, "Search clipboard") is not null,
                 "toggle returns to ordinary popup");

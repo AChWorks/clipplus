@@ -93,7 +93,7 @@ internal static class Native
     internal static extern bool PeekMessage(out Message message, nint hwnd, uint min, uint max, uint remove);
 
     [DllImport("user32.dll", SetLastError = true)]
-    internal static extern uint MsgWaitForMultipleObjectsEx(uint count, ref nint handle,
+    internal static extern uint MsgWaitForMultipleObjectsEx(uint count, [In] nint[] handles,
         uint milliseconds, uint wakeMask, uint flags);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -162,9 +162,19 @@ internal static class Native
         return process == (uint)own.Id ? null : new PasteTarget(hwnd, thread, process);
     }
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
+
+    // Query the actual native modal loop, not the last notification seen
+    // by WPF. Call on the owning UI thread, outside the low-level hook.
+    internal static bool IsMoveSizeActive(nint hwnd)
+    {
+        var info = new GuiThreadInfo { Size = (uint)Marshal.SizeOf<GuiThreadInfo>() };
+        if (!GetGUIThreadInfo(GetCurrentThreadId(), ref info))
+            throw Error("GetGUIThreadInfo (move/size state)");
+        return (info.Flags & 2) != 0 && info.MoveSize == hwnd; // GUI_INMOVESIZE
+    }
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ClientToScreen(nint hwnd, ref Point point);

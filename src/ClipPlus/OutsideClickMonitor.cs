@@ -18,7 +18,10 @@ internal sealed class OutsideClickMonitor : IDisposable
     private readonly Thread _thread;
     private readonly Native.HookProc _callback;
     private readonly ManualResetEvent _stop = new(false);
+    private readonly AutoResetEvent _renew = new(false);
     private readonly Func<EventWaitHandle, bool>? _signalStop;
+    // The observer thread owns the native handle, including renewal.
+    private nint _hook;
     private Exception? _startError;
     private int _outsideButtons;
     private bool _disposed;
@@ -37,52 +40,84 @@ internal sealed class OutsideClickMonitor : IDisposable
         using var ready = new ManualResetEvent(false);
         _thread = new Thread(() =>
         {
-            nint hook = 0;
             try
             {
                 Native.PeekMessage(out _, 0, 0, 0, 0);
-                hook = Native.SetWindowsHookEx(14, _callback, Native.GetModuleHandle(null), 0); // WH_MOUSE_LL
-                if (hook == 0) throw Native.Error("SetWindowsHookEx (floating clipboard)");
+                InstallHook();
             }
             catch (Exception ex) { _startError = ex; }
             finally { ready.Set(); }
-            if (hook == 0) return;
+            if (_startError is not null) return;
             try { Pump(); }
             catch (Exception ex) { Failure = ex; }
             finally
             {
-                if (!Native.UnhookWindowsHookEx(hook))
-                    Failure ??= Native.Error("UnhookWindowsHookEx (floating clipboard)");
+                try { RemoveHook(); }
+                catch (Exception ex) { Failure ??= ex; }
                 if (Failure is not null)
                     Native.PostMessage(_window, Native.WmOutsideQuickFault, _generation, 0);
             }
         }) { IsBackground = true, Name = "ClipPlus outside click" };
         try { _thread.Start(); }
-        catch { _stop.Dispose(); throw; }
+        catch { _renew.Dispose(); _stop.Dispose(); throw; }
         ready.WaitOne();
         if (_startError is not null)
         {
             _thread.Join();
+            _renew.Dispose();
             _stop.Dispose();
             throw new InvalidOperationException("Outside-click detection could not be enabled.", _startError);
         }
     }
 
+    private void InstallHook()
+    {
+        _hook = Native.SetWindowsHookEx(14, _callback, Native.GetModuleHandle(null), 0); // WH_MOUSE_LL
+        if (_hook == 0) throw Native.Error("SetWindowsHookEx (floating clipboard)");
+    }
+
+    private void RemoveHook()
+    {
+        if (_hook == 0) return;
+        if (!Native.UnhookWindowsHookEx(_hook))
+        {
+            var error = Native.Error("UnhookWindowsHookEx (floating clipboard)");
+            // Windows can silently remove a timed-out low-level hook while
+            // its owner thread is still alive. It is already uninstalled.
+            if (error.NativeErrorCode != 1404) throw error; // ERROR_INVALID_HOOK_HANDLE
+            _outsideButtons = 0;
+        }
+        _hook = 0;
+    }
+
+    internal void RenewAfterMoveSize()
+    {
+        // A live thread is not proof of a live low-level hook. Re-arm once
+        // at a native interaction boundary, on the same owner thread.
+        // No polling, extra hook or synchronous UI-thread join is needed.
+        if (!_disposed && !_renew.Set())
+            throw new InvalidOperationException("Could not renew outside-click detection after move/size.");
+    }
+
     private void Pump()
     {
-        // Wait atomically for either the owned stop event or native messages.
-        // Unlike posting WM_QUIT, signaling this event does not depend on
-        // queue capacity, and shutdown wins over pending input. The handle
-        // remains valid until the thread has actually terminated.
-        var handle = _stop.SafeWaitHandle.DangerousGetHandle();
+        // Stop has priority, renewal is coalesced, and native input remains
+        // event-driven. Both handles stay valid until the owner has joined.
+        var handles = new[] { _stop.SafeWaitHandle.DangerousGetHandle(), _renew.SafeWaitHandle.DangerousGetHandle() };
         const uint sentOrPostedMessages = 0x0040 | 0x0008;
         const uint inputAvailable = 0x0004;
         while (true)
         {
-            var result = Native.MsgWaitForMultipleObjectsEx(1, ref handle, uint.MaxValue,
+            var result = Native.MsgWaitForMultipleObjectsEx((uint)handles.Length, handles, uint.MaxValue,
                 sentOrPostedMessages, inputAvailable);
             if (result == 0) return;
-            if (result != 1) throw Native.Error("Wait for outside-click messages");
+            if (result == 1)
+            {
+                RemoveHook();
+                InstallHook();
+                continue;
+            }
+            if (result != 2) throw Native.Error("Wait for outside-click messages");
             // PeekMessage dispatches sent low-level hook callbacks, even if
             // there is no posted message to retrieve. This thread owns no HWND.
             if (Native.PeekMessage(out var message, 0, 0, 0, 1) && message.Id == 0x0012)
@@ -131,6 +166,7 @@ internal sealed class OutsideClickMonitor : IDisposable
         if (_thread.IsAlive && !(_signalStop?.Invoke(_stop) ?? _stop.Set()) && _thread.IsAlive)
             throw new InvalidOperationException("Could not signal outside-click detection to stop.");
         _thread.Join();
+        _renew.Dispose();
         _stop.Dispose();
         _disposed = true;
     }
