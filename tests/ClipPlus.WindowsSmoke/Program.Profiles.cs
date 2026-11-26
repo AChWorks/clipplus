@@ -52,15 +52,21 @@ internal static partial class Program
             var legacySettings = new { WindowHeight = name == "normal" ? 410d : 470d,
                 WindowPosition = new WindowPosition(25, 40), Shortcut = "CtrlShiftV",
                 CompactView = name == "normal", ActiveView = (long?)category };
-            object settingsValue = args.Contains("--with-quick-geometry")
+            var quickGeometry = new PopupGeometry(name == "normal" ? 205 : 240, name == "normal" ? 385 : 355,
+                new WindowPosition(55, 75));
+            var quickSettings = new
+            {
+                legacySettings.WindowHeight, legacySettings.WindowPosition, legacySettings.Shortcut,
+                QuickPanel = quickGeometry, legacySettings.CompactView, legacySettings.ActiveView
+            };
+            object settingsValue = args.Contains("--with-width-geometry")
                 ? new
                 {
-                    legacySettings.WindowHeight, legacySettings.WindowPosition, legacySettings.Shortcut,
-                    QuickPanel = new PopupGeometry(name == "normal" ? 205 : 240, name == "normal" ? 385 : 355,
-                        new WindowPosition(55, 75)),
-                    legacySettings.CompactView, legacySettings.ActiveView
+                    quickSettings.WindowHeight, quickSettings.WindowPosition, quickSettings.Shortcut,
+                    quickSettings.QuickPanel, quickSettings.CompactView, quickSettings.ActiveView,
+                    WindowWidth = name == "normal" ? 310d : 420d
                 }
-                : legacySettings;
+                : args.Contains("--with-quick-geometry") ? quickSettings : legacySettings;
             File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(settingsValue,
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             return 0;

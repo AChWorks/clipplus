@@ -74,3 +74,4 @@ For v0.1.0, the Owner accepted the representative Windows CI and prior hands-on 
 ## v0.2.4 additional acceptance
 
 - In default floating mode, click outside the expanded panel (including in the already-foreground application), drag the passive 42-DIP icon to another location and an edge, reopen by icon click and shortcut, and verify preferred panel size, work-area clamping, unchanged icon anchor, external focus, query retention and repeated paste. Verify Always expanded prevents collapse and can restore an active collapsed session; verify close/unpin, restart persistence, light/dark/high-contrast appearance, no accidental open on drag and no loss of outside click delivery. Exercise disconnected/mixed-DPI monitors on actual Windows clients where available.
+- Validate upgrade, failed-upgrade rollback and uninstall from the exact checksum-matched v0.2.3 setup with independent saved normal/quick widths and two synthetic profiles; retain earlier release fixtures.

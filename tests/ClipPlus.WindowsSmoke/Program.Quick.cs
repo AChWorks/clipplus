@@ -127,12 +127,13 @@ internal static partial class Program
             }
             ClickTarget();
             PumpUntil(() => clicks == 1);
-            Check(popup.IsVisible && popup.IsQuickMode, "always-expanded mode keeps panel open after an outside click");
+            Check(clicks == 1 && popup.IsVisible && popup.IsQuickMode, "always-expanded mode delivers the outside click and keeps panel open");
             set(get() with { AutoCollapseQuickPanel = true });
             popup.QuickBehaviorChanged();
             ClickTarget();
             PumpUntil(() => clicks == 2 && !popup.IsVisible);
-            Check(Native.GetForegroundWindow() == targetHwnd, "outside click still reaches the target button exactly once");
+            Check(clicks == 2 && !popup.IsVisible && Native.GetForegroundWindow() == targetHwnd,
+                "outside click collapses the panel and still reaches the target button exactly once");
             var icon = Application.Current.Windows.OfType<FloatingIconWindow>().Single(w => w.IsVisible);
             Check(popup.IsQuickMode && !popup.IsVisible && icon.IsVisible, "floating mode retains quick session");
             foreach (var theme in new[] { (Dark: false, Contrast: false, Name: "light"), (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
@@ -142,9 +143,21 @@ internal static partial class Program
             }
             set(get() with { AutoCollapseQuickPanel = false });
             popup.QuickBehaviorChanged();
-            Check(popup.IsVisible && !icon.IsVisible && popup.IsQuickMode, "always-expanded setting restores the full panel");
-            popup.HidePopup();
-            Check(!icon.IsVisible && !popup.IsQuickMode, "closing the quick session hides all floating UI");
+            Check(popup.IsVisible && !icon.IsVisible && popup.IsQuickMode && Native.GetForegroundWindow() == targetHwnd,
+                "always-expanded setting restores the full panel without activating it");
+            ClickTarget();
+            PumpUntil(() => clicks == 3);
+            Check(clicks == 3 && popup.IsVisible && !icon.IsVisible, "switching to always-expanded stops automatic collapse");
+            set(get() with { AutoCollapseQuickPanel = true });
+            popup.QuickBehaviorChanged();
+            ClickTarget();
+            PumpUntil(() => clicks == 4 && icon.IsVisible);
+            Check(clicks == 4 && icon.IsVisible && !popup.IsVisible, "re-enabling floating mode restores outside-click detection");
+            popup.OpenFloatingPanel();
+            Check(popup.IsVisible && !icon.IsVisible, "collapsed session reopens");
+            var close = (Button)popup.FindName("CloseButton");
+            close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, close));
+            Check(!icon.IsVisible && !popup.IsVisible && !popup.IsQuickMode, "closing the quick session hides all floating UI");
         }
         finally { target.Close(); }
     }

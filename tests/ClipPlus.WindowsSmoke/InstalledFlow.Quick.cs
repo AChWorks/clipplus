@@ -61,8 +61,13 @@ internal static partial class InstalledFlow
     private static void PointerClick(AutomationElement element)
     {
         var rect = element.Current.BoundingRectangle;
-        if (rect.IsEmpty || !Native.SetCursorPos((int)(rect.Left + rect.Width / 2), (int)(rect.Top + rect.Height / 2)))
-            throw new InvalidOperationException("Could not reach test control.");
+        if (rect.IsEmpty) throw new InvalidOperationException("Could not reach test control.");
+        ClickAt((int)(rect.Left + rect.Width / 2), (int)(rect.Top + rect.Height / 2));
+    }
+
+    private static void ClickAt(int x, int y)
+    {
+        if (!Native.SetCursorPos(x, y)) throw Native.Error("Move pointer to test control");
         Pump(TimeSpan.FromMilliseconds(80));
         SendMouse(0x0002);
         Pump(TimeSpan.FromMilliseconds(80));
@@ -410,7 +415,23 @@ internal static partial class InstalledFlow
             "restarted application enters quick mode only on explicit toggle");
         if (preferences.FloatingPosition is not { } position)
             throw new InvalidOperationException("No persisted floating icon position after restart.");
-        VerifyFloatingBounds(popup, new Native.Point { X = position.X, Y = position.Y }, preferences.QuickPanel);
+        var anchor = new Native.Point { X = position.X, Y = position.Y };
+        VerifyFloatingBounds(popup, anchor, preferences.QuickPanel);
+        var panel = Bounds(popup);
+        var outside = Bounds(target);
+        var centerY = (outside.Top + outside.Bottom) / 2;
+        var click = new[] { (X: (outside.Left + outside.Right) / 2, Y: centerY),
+            (X: outside.Left + 25, Y: centerY), (X: outside.Right - 25, Y: centerY) }
+            .First(point => point.X < panel.Left || point.X >= panel.Right || point.Y < panel.Top || point.Y >= panel.Bottom);
+        ClickAt(click.X, click.Y);
+        var icon = RequireCollapsed(popup, target);
+        var iconBounds = Bounds(icon);
+        if (Math.Abs(iconBounds.Left - position.X) > 2 || Math.Abs(iconBounds.Top - position.Y) > 2)
+            throw new InvalidOperationException("Restart changed the independently saved floating icon anchor.");
+        PointerClick(QuickRequire(icon, "Open pinned clipboard"));
+        Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 && Native.GetForegroundWindow() == target,
+            "restarted floating icon opens without stealing focus");
+        VerifyFloatingBounds(popup, anchor, preferences.QuickPanel);
         PointerClick(QuickRequire(popup, "Return to clipboard history"));
         Wait(() => Native.GetForegroundWindow() == popup && QuickFind(popup, "Search clipboard") is not null,
             "restarted application restores independent normal geometry");

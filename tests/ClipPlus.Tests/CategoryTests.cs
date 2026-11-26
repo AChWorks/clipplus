@@ -57,6 +57,14 @@ public sealed class CategoryTests
             Assert.True(previous.CompactView);
             Assert.Equal(7L, previous.ActiveView);
 
+            // The immediately preceding release stores both preferred widths.
+            File.WriteAllText(path, """{"WindowHeight":650,"WindowWidth":310,"WindowPosition":{"X":-400,"Y":50},"QuickPanel":{"Width":225,"Height":390,"Position":{"X":120,"Y":30}},"CompactView":true,"ActiveView":7}""");
+            var latest = Preferences.Load(path);
+            Assert.Equal(new PopupGeometry(310, 650, new WindowPosition(-400, 50)), latest.Geometry(false));
+            Assert.Equal(previous.Geometry(true), latest.Geometry(true));
+            Assert.True(latest.AutoCollapseQuickPanel);
+            Assert.Null(latest.FloatingPosition);
+
             var normal = new PopupGeometry(290, 600, new WindowPosition(-450, 60));
             var quick = new PopupGeometry(180, 350, new WindowPosition(140, 40));
             var normalOnly = previous.WithGeometry(normal, false);

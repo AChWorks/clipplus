@@ -287,6 +287,10 @@ internal static partial class Program
             Check(fit.Left >= small.Left && fit.Top >= small.Top && fit.Right <= small.Right &&
                   fit.Bottom <= small.Bottom && fit.Bottom - fit.Top == 720,
                 "smaller high-DPI destination clamps manual bounds");
+            var floatingBounds = PopupWindow.ClampBounds(small, new Native.Point { X = -8, Y = 710 }, 63, 63);
+            Check(floatingBounds.Right == small.Right && floatingBounds.Bottom == small.Bottom &&
+                floatingBounds.Right - floatingBounds.Left == 63 && floatingBounds.Bottom - floatingBounds.Top == 63,
+                "42-DIP floating icon stays inside a negative-coordinate high-DPI work area");
             var large = new Native.Rect { Left = 0, Top = 0, Right = 1920, Bottom = 1080 };
             fit = PopupWindow.FitBounds(large, 1, new Native.Point { X = 1900, Y = 1000 }, 650, false);
             Check(fit.Right == large.Right && fit.Bottom == large.Bottom && fit.Bottom - fit.Top == 650,
