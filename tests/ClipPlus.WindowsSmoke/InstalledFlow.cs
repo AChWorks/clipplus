@@ -302,7 +302,7 @@ internal static partial class InstalledFlow
             throw new InvalidOperationException($"Saved popup bounds differ: actual {actual.Left},{actual.Top},{actual.Right - actual.Left},{actual.Bottom - actual.Top}; saved {saved.X},{saved.Y},{geometry.Width},{geometry.Height}");
     }
 
-    private static void ResizeHorizontal(nint hwnd, string settings, bool quick, nint foreground)
+    private static void ResizeHorizontal(nint hwnd, string settings, bool quick, nint foreground, Action<string>? afterResize = null)
     {
         var initial = Preferences.Load(settings);
         var minimum = quick ? 160 : 260;
@@ -329,6 +329,7 @@ internal static partial class InstalledFlow
         Wait(() => WidthMatches(minimum), $"{label} native right-edge shrink reaches minimum without changing other geometry or focus");
         var atMinimum = Preferences.Load(settings);
         VerifyPopupGeometry(hwnd, atMinimum.Geometry(quick));
+        afterResize?.Invoke("horizontal shrink");
         before = Bounds(hwnd);
         var monitor = Native.MonitorFromRect(ref before, 2);
         var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
@@ -342,6 +343,7 @@ internal static partial class InstalledFlow
         else throw new InvalidOperationException("The test desktop cannot expand the popup.");
         Wait(() => WidthMatches(minimum + 45), $"{label} native horizontal expansion persists independently and preserves focus");
         VerifyPopupGeometry(hwnd, Preferences.Load(settings).Geometry(quick));
+        afterResize?.Invoke("horizontal expansion");
     }
 
     private static void DragAndResize(nint hwnd, string settings)

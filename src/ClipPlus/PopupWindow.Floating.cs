@@ -28,6 +28,15 @@ public partial class PopupWindow
         }
     }
 
+    private void RenewOutsideClickMonitor()
+    {
+        if (!IsQuickMode || !IsVisible || !_preferences().AutoCollapseQuickPanel) return;
+        if (_outsideClick is { IsRunning: true } observer)
+            observer.RenewAfterMoveSize();
+        else
+            UpdateOutsideClickMonitor();
+    }
+
     private void StopOutsideClickMonitor()
     {
         if (_outsideClick is null) return;
@@ -41,6 +50,7 @@ public partial class PopupWindow
     private void EndFloatingSession()
     {
         StopOutsideClickMonitor();
+        ResetMoveSizeTracking();
         // The hidden icon is reused during expand/collapse, but once the
         // pinned session ends there is no reason to retain its native window.
         _floatingIcon?.Close();
@@ -59,6 +69,7 @@ public partial class PopupWindow
         // The current surface remains visible until the observer is stopped.
         // If signaling fails, retain both the observer and the usable panel.
         StopOutsideClickMonitor();
+        ResetMoveSizeTracking();
         try
         {
             if (!Native.GetWindowRect(Handle, out var rect)) throw Native.Error("GetWindowRect (quick panel)");

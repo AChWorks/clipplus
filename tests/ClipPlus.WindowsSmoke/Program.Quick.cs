@@ -207,9 +207,18 @@ internal static partial class Program
             popup.OpenFloatingPanel();
             Check(popup.IsVisible && !icon.IsVisible && ReferenceEquals(source, list.ItemsSource) && search.Text == query,
                 "collapsed session reopens with the existing filtered view");
+            // Inject the notification imbalance independently of the actual
+            // Windows move loop. A stale application-side tracking flag must
+            // not suppress a real outside gesture when no native move is active.
+            Check(Native.PostMessage(popup.Handle, 0x0231, 0, 0), "inject unmatched WM_ENTERSIZEMOVE");
+            InstalledFlow.Pump(TimeSpan.FromMilliseconds(100));
+            var gui = new Native.GuiThreadInfo { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.GuiThreadInfo>() };
+            Check(Native.GetGUIThreadInfo(Native.GetWindowThreadProcessId(popup.Handle, out _), ref gui) &&
+                (gui.Flags & 2) == 0 && gui.MoveSize == 0, "injected notification did not enter a real Windows move/size loop");
             ClickTarget();
             PumpUntil(() => clicks == 5 && icon.IsVisible);
-            Check(clicks == 5 && icon.IsVisible && !popup.IsVisible, "collapse again before explicit history invalidation");
+            Check(clicks == 5 && icon.IsVisible && !popup.IsVisible,
+                "stale move/size notification cannot suppress outside collapse after reopening");
             store.SetTitle(pin, "Match updated while hidden");
             popup.HistoryChanged();
             popup.OpenFloatingPanel();
@@ -243,6 +252,40 @@ internal static partial class Program
                 "retry stops the retained native observer and successfully collapses");
             popup.OpenFloatingPanel();
             Check(popup.IsVisible && !icon.IsVisible, "session reopens after stop recovery");
+
+            // Model silent removal by Windows without actually blocking
+            // the global input chain or changing the system timeout. The
+            // test removes the real native hook but leaves its thread alive.
+            // Use reflection only in this isolated regression harness.
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            foreach (var completion in new[] { (Message: 0x0232, Name: "native exit"),
+                (Message: 0x001F, Name: "cancel mode"), (Message: 0x0215, Name: "capture loss") })
+            {
+                var observer = (OutsideClickMonitor)typeof(PopupWindow).GetField("_outsideClick", flags)!.GetValue(popup)!;
+                var hook = (nint)typeof(OutsideClickMonitor).GetField("_hook", flags)!.GetValue(observer)!;
+                Check(hook != 0 && Native.UnhookWindowsHookEx(hook) && observer.IsRunning,
+                    completion.Name + ": simulate loss of actual hook while owner thread remains alive");
+                var count = clicks;
+                ClickTarget();
+                PumpUntil(() => clicks == count + 1);
+                Check(clicks == count + 1 && popup.IsVisible && !icon.IsVisible,
+                    completion.Name + ": removed hook no longer detects real outside clicks");
+                Check(Native.PostMessage(popup.Handle, 0x0231, 0, 0) &&
+                    Native.PostMessage(popup.Handle, completion.Message, 0, 0),
+                    completion.Name + ": deliver move/size completion boundary");
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(150));
+                Check(observer.IsRunning &&
+                    ReferenceEquals(observer, typeof(PopupWindow).GetField("_outsideClick", flags)!.GetValue(popup)),
+                    completion.Name + ": re-arm on existing owner thread without creating another observer");
+                ClickTarget();
+                PumpUntil(() => clicks == count + 2 && icon.IsVisible);
+                Check(clicks == count + 2 && icon.IsVisible && !popup.IsVisible && stopErrors() == 4,
+                    completion.Name + ": first subsequent outside gesture reaches target and collapses panel");
+                popup.OpenFloatingPanel();
+                Check(popup.IsVisible && !icon.IsVisible && search.Text == query &&
+                    Native.GetForegroundWindow() == targetHwnd,
+                    completion.Name + ": reopened quick session preserves query and focus");
+            }
             close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, close));
             Check(!icon.IsVisible && !popup.IsVisible && !popup.IsQuickMode &&
                 !Application.Current.Windows.OfType<FloatingIconWindow>().Any(),

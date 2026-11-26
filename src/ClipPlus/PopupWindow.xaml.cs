@@ -210,8 +210,18 @@ public partial class PopupWindow : Window
             Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
             {
                 if (_outsideClick is not null && wParam == _outsideClickGeneration &&
-                    IsQuickMode && IsVisible && !_placing && !_inMoveSize && _preferences().AutoCollapseQuickPanel)
-                    Run(CollapseQuickPanel);
+                    IsQuickMode && IsVisible && !_placing && _preferences().AutoCollapseQuickPanel)
+                    Run(() =>
+                    {
+                        // A missed exit notification must not permanently
+                        // veto outside clicks. Keep a genuine modal move or
+                        // resize intact; otherwise finish any stale tracking.
+                        if (Native.IsMoveSizeActive(hwnd)) return;
+                        // Saving geometry is independent of dismissal; a
+                        // failed save must not turn into a permanent veto.
+                        Run(() => CompleteMoveSize(hwnd));
+                        CollapseQuickPanel();
+                    });
             }));
             return 0;
         }
@@ -240,36 +250,63 @@ public partial class PopupWindow : Window
             _userMoving = true;
         else if (_inMoveSize && message == 0x0214) // WM_SIZING
             _userSizing = true;
-        else if (message == 0x0232 && _inMoveSize) // WM_EXITSIZEMOVE
+        else if (message == 0x0232) // WM_EXITSIZEMOVE
+            Run(() => FinishMoveSize(hwnd));
+        else if (_inMoveSize && (message is 0x0215 or 0x001F)) // WM_CAPTURECHANGED / WM_CANCELMODE
         {
-            _inMoveSize = false;
-            if (!Native.GetWindowRect(hwnd, out var rect)) return 0;
-            var moved = rect.Left != _moveStart.Left || rect.Top != _moveStart.Top;
-            var resized = _userSizing && rect.Bottom - rect.Top != _moveStart.Bottom - _moveStart.Top;
-            var widthChanged = _userSizing && rect.Right - rect.Left != _moveStart.Right - _moveStart.Left;
-            if ((!moved || !(_userMoving || _userSizing)) && !resized && !widthChanged) return 0;
-            var monitor = Native.MonitorFromRect(ref rect, 2);
-            var scale = MonitorScale(monitor);
-            double? height = resized ? (rect.Bottom - rect.Top) / scale : null;
-            // Reuse the opening placement path on the destination monitor,
-            // preserving the requested (unclamped) size across displays.
-            Run(() =>
+            // Cancellation/capture loss may precede the usual exit message.
+            // Reconcile after native dispatch and only if the loop has
+            // actually ended. The ordinary exit path clears the same state.
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
             {
-                _placing = true;
-                try
+                if (_inMoveSize) Run(() =>
                 {
-                    var anchor = new Native.Point { X = rect.Left, Y = rect.Top };
-                    var quick = IsQuickMode;
-                    var previous = _preferences().Geometry(quick);
-                    var width = widthChanged ? (rect.Right - rect.Left) / scale : previous.Width;
-                    var preferredHeight = height ?? previous.Height;
-                    var actual = PlaceWindow(hwnd, monitor, anchor, preferredHeight, false, width);
-                    _saveGeometry(new PopupGeometry(width, preferredHeight, new WindowPosition(actual.X, actual.Y)), quick);
-                }
-                finally { _placing = false; }
-            });
+                    if (!Native.IsMoveSizeActive(hwnd)) FinishMoveSize(hwnd);
+                });
+            }));
         }
         return 0;
+    }
+
+    private void ResetMoveSizeTracking()
+    {
+        _inMoveSize = _userMoving = _userSizing = false;
+    }
+
+    private void FinishMoveSize(nint hwnd)
+    {
+        try { CompleteMoveSize(hwnd); }
+        finally { RenewOutsideClickMonitor(); }
+    }
+
+    private void CompleteMoveSize(nint hwnd)
+    {
+        if (!_inMoveSize) return;
+        var moving = _userMoving;
+        var sizing = _userSizing;
+        ResetMoveSizeTracking();
+        if (!Native.GetWindowRect(hwnd, out var rect)) throw Native.Error("GetWindowRect (move/size completion)");
+        var moved = rect.Left != _moveStart.Left || rect.Top != _moveStart.Top;
+        var resized = sizing && rect.Bottom - rect.Top != _moveStart.Bottom - _moveStart.Top;
+        var widthChanged = sizing && rect.Right - rect.Left != _moveStart.Right - _moveStart.Left;
+        if ((!moved || !(moving || sizing)) && !resized && !widthChanged) return;
+        var monitor = Native.MonitorFromRect(ref rect, 2);
+        var scale = MonitorScale(monitor);
+        // Reuse the opening placement path on the destination monitor,
+        // preserving the requested (unclamped) size across displays.
+        var wasPlacing = _placing;
+        _placing = true;
+        try
+        {
+            var anchor = new Native.Point { X = rect.Left, Y = rect.Top };
+            var quick = IsQuickMode;
+            var previous = _preferences().Geometry(quick);
+            var width = widthChanged ? (rect.Right - rect.Left) / scale : previous.Width;
+            var preferredHeight = resized ? (rect.Bottom - rect.Top) / scale : previous.Height;
+            var actual = PlaceWindow(hwnd, monitor, anchor, preferredHeight, false, width);
+            _saveGeometry(new PopupGeometry(width, preferredHeight, new WindowPosition(actual.X, actual.Y)), quick);
+        }
+        finally { _placing = wasPlacing; }
     }
 
     internal void ShowAt(Native.Point anchor, Native.PasteTarget? target = null)
@@ -387,6 +424,7 @@ public partial class PopupWindow : Window
         // A failed observer stop must leave the expanded quick panel usable.
         // Complete quick cleanup before changing either surface's visibility.
         if (IsQuickMode) ResetQuickMode();
+        ResetMoveSizeTracking();
         EndTitle(false, false);
         ClosePalette(false);
         CloseCategoryPicker(false);

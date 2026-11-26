@@ -32,29 +32,29 @@ jobs:
         run: |
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | Format-List
           New-Item -ItemType Directory -Path TestResults -Force | Out-Null
-          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v024'
-          git fetch --no-tags origin refs/tags/v0.2.4:refs/tags/v0.2.4
+          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v025'
+          git fetch --no-tags origin refs/tags/v0.2.5:refs/tags/v0.2.5
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git worktree add --detach $baseline 6f0f9e0acd6f6927bac3f20204baa0ab0b9e8386
+          git worktree add --detach $baseline e78d0bd96bdb48c1a2c48c24fd1a4920e435583c
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           try {
             $source = Join-Path $baseline 'tests/ClipPlus.WindowsSmoke'
             Copy-Item tests/ClipPlus.WindowsSmoke/Program.Benchmark.cs $source
             dotnet build (Join-Path $source 'ClipPlus.WindowsSmoke.csproj') -c Release
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v024.txt
+            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v025.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v025.txt
+            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v026.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            foreach ($file in @('TestResults/performance-v024.txt','TestResults/performance-v025.txt')) {
+            foreach ($file in @('TestResults/performance-v025.txt','TestResults/performance-v026.txt')) {
               if (-not (Select-String -Path $file -Pattern 'BENCH first-open-recent') -or
                   -not (Select-String -Path $file -Pattern 'BENCH idle-quick-expanded') -or
                   -not (Select-String -Path $file -Pattern 'BENCH motion-quick-expanded')) {
                 throw "Interactive WPF benchmark incomplete: $file"
               }
             }
-            if (-not (Select-String -Path TestResults/performance-v025.txt -Pattern 'BENCH floating-expand-final') -or
-                -not (Select-String -Path TestResults/performance-v025.txt -Pattern 'BENCH idle-floating-after-cycles')) {
+            if (-not (Select-String -Path TestResults/performance-v026.txt -Pattern 'BENCH floating-expand-final') -or
+                -not (Select-String -Path TestResults/performance-v026.txt -Pattern 'BENCH idle-floating-after-cycles')) {
               throw 'Floating transition and resource measurements did not run.'
             }
           } finally { git worktree remove --force $baseline }
@@ -84,7 +84,7 @@ jobs:
       - name: Build portable executable and graphical installer
         shell: pwsh
         run: ./scripts/Build-Package.ps1 -BuildFaultHarness
-      - name: Retrieve exact released v0.1.0 through v0.2.4 installer fixtures
+      - name: Retrieve exact released v0.1.0 through v0.2.5 installer fixtures
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,11 +107,14 @@ jobs:
           $floating = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.4'
           gh release download v0.2.4 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $floating
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $glass = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.5'
+          gh release download v0.2.5 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $glass
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise portable and installer lifecycle on isolated Windows
         shell: pwsh
         run: |
           $legacy = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.1.0'
-          ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe -LegacySetup (Join-Path $legacy 'ClipPlus-Setup.exe') -PreviousSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.0/ClipPlus-Setup.exe') -StableSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.1/ClipPlus-Setup.exe') -QuickSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.2/ClipPlus-Setup.exe') -WidthSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.3/ClipPlus-Setup.exe') -FloatingSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.4/ClipPlus-Setup.exe')
+          ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe -LegacySetup (Join-Path $legacy 'ClipPlus-Setup.exe') -PreviousSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.0/ClipPlus-Setup.exe') -StableSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.1/ClipPlus-Setup.exe') -QuickSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.2/ClipPlus-Setup.exe') -WidthSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.3/ClipPlus-Setup.exe') -FloatingSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.4/ClipPlus-Setup.exe') -GlassSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.5/ClipPlus-Setup.exe')
       - name: Upload verified candidate files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
