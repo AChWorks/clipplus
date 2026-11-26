@@ -9,199 +9,207 @@
         Foreground="{DynamicResource TextBrush}" FontFamily="Segoe UI" FontSize="13"
         UseLayoutRounding="True">
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="0,6,0,6"
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6"
                             GlassFrameThickness="0" CornerRadius="8" />
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
-        <GridLength x:Key="HistoryGutter">12</GridLength>
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-            <Setter Property="BorderBrush" Value="Transparent"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="5,3"/>
-            <Setter Property="MinHeight" Value="26"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Surface" CornerRadius="4" Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource HoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SelectedBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="CategoryChip" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <!-- Keep the border only as transient keyboard focus feedback. -->
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Margin" Value="0,0,3,0"/>
-            <Setter Property="Padding" Value="6,2"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Surface" CornerRadius="4" Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource HoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SelectedBrush}"/>
-                            </Trigger>
-                            <!-- A selected category remains distinguishable while hovered. -->
-                            <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource CategorySelectedBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
-                            </Trigger>
-                            <MultiTrigger>
-                                <MultiTrigger.Conditions>
-                                    <Condition Property="IsKeyboardFocused" Value="True"/>
-                                    <Condition Property="AutomationProperties.ItemStatus" Value="Selected"/>
-                                </MultiTrigger.Conditions>
-                                <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource CategorySelectedFocusBrush}"/>
-                            </MultiTrigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="CategoryChoiceFocus" TargetType="Control">
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Control">
-                        <Rectangle Margin="1" RadiusX="3" RadiusY="3" Stroke="{DynamicResource FocusBrush}"
-                                   StrokeThickness="1" StrokeDashArray="2 2" SnapsToDevicePixels="True"/>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="CategoryChoiceSelectedFocus" TargetType="Control">
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Control">
-                        <Rectangle Margin="1" RadiusX="3" RadiusY="3" Stroke="{DynamicResource CategorySelectedFocusBrush}"
-                                   StrokeThickness="1" StrokeDashArray="2 2" SnapsToDevicePixels="True"/>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="CategoryChoice" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <!-- WPF draws FocusVisualStyle only for keyboard-driven focus. -->
-            <Setter Property="FocusVisualStyle" Value="{StaticResource CategoryChoiceFocus}"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Margin" Value="1.5"/>
-            <Setter Property="Padding" Value="6,2"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Surface" CornerRadius="4" Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource HoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SelectedBrush}"/>
-                            </Trigger>
-                            <!-- A selected category remains distinguishable while hovered. -->
-                            <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
-                                <Setter TargetName="Surface" Property="Background" Value="{DynamicResource CategorySelectedBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
-                    <Setter Property="FocusVisualStyle" Value="{StaticResource CategoryChoiceSelectedFocus}"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="{DynamicResource FieldBrush}"/>
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
-            <Setter Property="CaretBrush" Value="{DynamicResource TextBrush}"/>
-            <Setter Property="SelectionBrush" Value="{DynamicResource FocusBrush}"/>
-            <Setter Property="Padding" Value="6,4"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
-        <Style TargetType="ListBoxItem">
-            <Setter Property="Padding" Value="0"/>
-            <Setter Property="Margin" Value="0,0,0,5"/>
-            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ListBoxItem">
-                        <ContentPresenter HorizontalAlignment="Stretch"/>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="QuickCard" TargetType="Border">
-            <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
-            <Setter Property="BorderBrush" Value="Transparent"/>
-            <Style.Triggers>
-                <MultiDataTrigger>
-                    <MultiDataTrigger.Conditions>
-                        <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
-                        <Condition Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
-                    </MultiDataTrigger.Conditions>
-                    <Setter Property="Background" Value="{DynamicResource SelectedBrush}"/>
-                    <Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
-                </MultiDataTrigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="ClipCard" TargetType="Border">
-            <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="6"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource SelectedBrush}"/>
-                    <Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Assets/ClipPlusIcon.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <GridLength x:Key="HistoryGutter">12</GridLength>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                <Setter Property="BorderBrush" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Padding" Value="5,3"/>
+                <Setter Property="MinHeight" Value="26"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Surface" CornerRadius="4" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                    <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SelectedBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.5"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="CategoryChip" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                <!-- Keep the border only as transient keyboard focus feedback. -->
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Margin" Value="0,0,3,0"/>
+                <Setter Property="Padding" Value="6,2"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Surface" CornerRadius="4" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SelectedBrush}"/>
+                                </Trigger>
+                                <!-- A selected category remains distinguishable while hovered. -->
+                                <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource CategorySelectedBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                    <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
+                                </Trigger>
+                                <MultiTrigger>
+                                    <MultiTrigger.Conditions>
+                                        <Condition Property="IsKeyboardFocused" Value="True"/>
+                                        <Condition Property="AutomationProperties.ItemStatus" Value="Selected"/>
+                                    </MultiTrigger.Conditions>
+                                    <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource CategorySelectedFocusBrush}"/>
+                                </MultiTrigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.5"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="CategoryTab" TargetType="Button" BasedOn="{StaticResource CategoryChip}">
+                <Setter Property="Background" Value="{DynamicResource CategoryIdleBrush}"/>
+            </Style>
+            <Style x:Key="CategoryChoiceFocus" TargetType="Control">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Control">
+                            <Rectangle Margin="1" RadiusX="3" RadiusY="3" Stroke="{DynamicResource FocusBrush}"
+                                       StrokeThickness="1" StrokeDashArray="2 2" SnapsToDevicePixels="True"/>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="CategoryChoiceSelectedFocus" TargetType="Control">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Control">
+                            <Rectangle Margin="1" RadiusX="3" RadiusY="3" Stroke="{DynamicResource CategorySelectedFocusBrush}"
+                                       StrokeThickness="1" StrokeDashArray="2 2" SnapsToDevicePixels="True"/>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="CategoryChoice" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                <!-- WPF draws FocusVisualStyle only for keyboard-driven focus. -->
+                <Setter Property="FocusVisualStyle" Value="{StaticResource CategoryChoiceFocus}"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Margin" Value="1.5"/>
+                <Setter Property="Padding" Value="6,2"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Surface" CornerRadius="4" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource SelectedBrush}"/>
+                                </Trigger>
+                                <!-- A selected category remains distinguishable while hovered. -->
+                                <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
+                                    <Setter TargetName="Surface" Property="Background" Value="{DynamicResource CategorySelectedBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.5"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="AutomationProperties.ItemStatus" Value="Selected">
+                        <Setter Property="FocusVisualStyle" Value="{StaticResource CategoryChoiceSelectedFocus}"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="TextBox">
+                <Setter Property="Background" Value="{DynamicResource FieldBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+                <Setter Property="CaretBrush" Value="{DynamicResource TextBrush}"/>
+                <Setter Property="SelectionBrush" Value="{DynamicResource FocusBrush}"/>
+                <Setter Property="Padding" Value="6,4"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+            </Style>
+            <Style TargetType="ListBoxItem">
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Margin" Value="0,0,0,5"/>
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ListBoxItem">
+                            <ContentPresenter HorizontalAlignment="Stretch"/>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="QuickCard" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
+                <Setter Property="BorderBrush" Value="Transparent"/>
+                <Style.Triggers>
+                    <MultiDataTrigger>
+                        <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
+                            <Condition Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+                        </MultiDataTrigger.Conditions>
+                        <Setter Property="Background" Value="{DynamicResource SelectedBrush}"/>
+                        <Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
+                    </MultiDataTrigger>
+                </Style.Triggers>
+            </Style>
+            <Style x:Key="ClipCard" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="6"/>
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource SelectedBrush}"/>
+                        <Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </ResourceDictionary>
     </Window.Resources>
     <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}" Padding="11,9,11,7">
         <Grid>
@@ -229,10 +237,15 @@
                         AutomationProperties.Name="Clear recent items" Content="Clear"/>
                 <Border x:Name="DragHeader" Background="Transparent" Cursor="SizeAll" ToolTip="Drag to move"
                         AutomationProperties.Name="Move clipboard window">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Image Source="Assets/ClipPlus.ico" Width="19" Height="19" Margin="0,0,7,0"/>
-                        <TextBlock Text="Clipboard" FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"/>
-                    </StackPanel>
+                    <Grid VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Image x:Name="HeaderIcon" Source="{StaticResource ClipPlusHeaderIcon}" Width="19" Height="19" Margin="0,0,7,0"/>
+                        <TextBlock Grid.Column="1" Text="Clipboard" FontWeight="SemiBold" FontSize="16"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                    </Grid>
                 </Border>
             </DockPanel>
             <Grid Grid.Row="1" Margin="0,0,0,5">
@@ -240,7 +253,7 @@
                          AutomationProperties.Name="Search clipboard" ToolTip="Search titles and clipboard text"/>
                 <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" Margin="9,0,0,0"
                            Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" IsHitTestVisible="False"/>
-                <TextBlock x:Name="SearchPlaceholder" Text="Search clipboard..." Margin="30,0,0,0"
+                <TextBlock x:Name="SearchPlaceholder" Text="Search clipboard..." Margin="30,0,5,0" TextTrimming="CharacterEllipsis"
                            Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" IsHitTestVisible="False"/>
             </Grid>
             <Grid x:Name="NavigationHost" Grid.Row="2" Margin="0,0,0,5">
@@ -251,8 +264,8 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <Button x:Name="PinnedTab" Content="Pinned" Style="{StaticResource CategoryChip}" AutomationProperties.Name="Pinned and recent clipboard history"/>
-                    <Button x:Name="RecentTab" Grid.Column="1" Content="Recent" Style="{StaticResource CategoryChip}" AutomationProperties.Name="Recent clips"/>
+                    <Button x:Name="PinnedTab" Content="Pinned" Style="{StaticResource CategoryTab}" AutomationProperties.Name="Pinned and recent clipboard history"/>
+                    <Button x:Name="RecentTab" Grid.Column="1" Content="Recent" Style="{StaticResource CategoryTab}" AutomationProperties.Name="Recent clips"/>
                     <ScrollViewer x:Name="CategoryScroll" Grid.Column="2" Margin="3,0"
                                   HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
                                   Focusable="False" CanContentScroll="False" AllowDrop="True" Background="Transparent">
@@ -367,7 +380,7 @@
                         Background="{DynamicResource FieldBrush}" Padding="2" Margin="4,0"
                         ToolTip="Collapse titled clips" AutomationProperties.Name="Collapse titled clips"/>
                 <TextBlock Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"
-                           Foreground="{DynamicResource MutedBrush}" FontSize="11" Text="&#x2195; Resize"/>
+                           Foreground="{DynamicResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis" Text="&#x2194; &#x2195; Resize"/>
             </Grid>
         </Grid>
     </Border>

@@ -111,7 +111,7 @@ public partial class PopupWindow
         }
         else
         {
-            tab.Background = System.Windows.Media.Brushes.Transparent;
+            tab.ClearValue(BackgroundProperty);
             tab.BorderBrush = System.Windows.Media.Brushes.Transparent;
             tab.SetResourceReference(ForegroundProperty, "TextBrush");
             tab.FontWeight = FontWeights.Normal;
@@ -152,7 +152,7 @@ public partial class PopupWindow
                     Text = category.Name, MaxWidth = 100, TextTrimming = TextTrimming.CharacterEllipsis,
                     FlowDirection = TextDirection(category.Name)
                 },
-                Style = (Style)FindResource("CategoryChip"),
+                Style = (Style)FindResource("CategoryTab"),
                 ToolTip = $"{category.Name}\nDouble-click or F2 to edit; drag or Ctrl+Left/Right to reorder"
             };
             AutomationProperties.SetName(tab, category.Name);
@@ -385,18 +385,22 @@ public partial class PopupWindow
             FlowDirection = TextDirection(label), VerticalAlignment = VerticalAlignment.Center
         };
         text.SetResourceReference(ForegroundProperty, "MutedBrush");
-        var content = new StackPanel { Orientation = Orientation.Horizontal };
+        var content = new Grid();
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         content.Children.Add(text);
         var arrow = Glyph("\uE70D");
         arrow.FontSize = 9;
         arrow.Margin = new Thickness(3, 0, 0, 0);
         arrow.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(arrow, 1);
         content.Children.Add(arrow);
         var description = $"Change category: {category.Name}";
         var button = new Button
         {
             Style = (Style)FindResource("CategoryChip"), Content = content, FontSize = 11, MinHeight = 26,
             Padding = new Thickness(3, 0, 3, 0), HorizontalAlignment = HorizontalAlignment.Left,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
             ToolTip = description, Margin = compact ? new Thickness(0) : new Thickness(0, 1, 0, 0)
         };
 
@@ -451,7 +455,8 @@ public partial class PopupWindow
             {
                 Text = string.IsNullOrWhiteSpace(SearchBox.Text) ? "Use + above to add a category." :
                     "Clear search and use + above to add a category.",
-                TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(3)
+                TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(3),
+                VerticalAlignment = VerticalAlignment.Center
             };
             hint.SetResourceReference(ForegroundProperty, "MutedBrush");
             row.CategoryChoices.Children.Add(hint);

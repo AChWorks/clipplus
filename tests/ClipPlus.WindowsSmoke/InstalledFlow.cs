@@ -69,7 +69,7 @@ internal static partial class InstalledFlow
                 VerifyGeometry(popupHwnd, Preferences.Load(settings));
                 VerifyQuickRestart(popupHwnd, hwnd, settings);
                 SendKeys(KeyInput(0x1B), KeyInput(0x1B, true));
-                Console.WriteLine("PASS: restarted application restored saved position and height");
+                Console.WriteLine("PASS: restarted application restored saved position, width and height");
                 return 0;
             }
 
@@ -288,13 +288,60 @@ internal static partial class InstalledFlow
 
     private static double Scale(nint hwnd) => Math.Max(1, Native.GetDpiForWindow(hwnd)) / 96.0;
 
-    private static void VerifyGeometry(nint hwnd, Preferences preferences)
+    private static void VerifyGeometry(nint hwnd, Preferences preferences) =>
+        VerifyPopupGeometry(hwnd, preferences.Geometry(false));
+
+    private static void VerifyPopupGeometry(nint hwnd, PopupGeometry geometry)
     {
         var actual = Bounds(hwnd);
-        var saved = preferences.WindowPosition ?? throw new InvalidOperationException("No saved popup position.");
+        var saved = geometry.Position ?? throw new InvalidOperationException("No saved popup position.");
+        var scale = Scale(hwnd);
         if (Math.Abs(actual.Left - saved.X) > 2 || Math.Abs(actual.Top - saved.Y) > 2 ||
-            Math.Abs((actual.Bottom - actual.Top) / Scale(hwnd) - preferences.WindowHeight) > 2)
-            throw new InvalidOperationException($"Saved popup bounds differ: actual {actual.Left},{actual.Top},{actual.Bottom - actual.Top}; saved {saved.X},{saved.Y},{preferences.WindowHeight}");
+            Math.Abs((actual.Right - actual.Left) / scale - geometry.Width) > 2 ||
+            Math.Abs((actual.Bottom - actual.Top) / scale - geometry.Height) > 2)
+            throw new InvalidOperationException($"Saved popup bounds differ: actual {actual.Left},{actual.Top},{actual.Right - actual.Left},{actual.Bottom - actual.Top}; saved {saved.X},{saved.Y},{geometry.Width},{geometry.Height}");
+    }
+
+    private static void ResizeHorizontal(nint hwnd, string settings, bool quick, nint foreground)
+    {
+        var initial = Preferences.Load(settings);
+        var minimum = quick ? 160 : 260;
+        var label = quick ? "quick" : "ordinary";
+        var before = Bounds(hwnd);
+        var scale = Scale(hwnd);
+        var inset = Math.Max(2, (int)Math.Round(3 * scale));
+        var y = (before.Top + before.Bottom) / 2;
+        // Attempt to go below the useful minimum through the native right
+        // edge. Validate both the actual bounds and the saved preference.
+        var reduction = (int)Math.Round(Math.Max(45, (before.Right - before.Left) / scale - minimum + 45) * scale);
+        Drag(before.Right - inset, y, before.Right - inset - reduction, y);
+        bool WidthMatches(double width)
+        {
+            var current = Preferences.Load(settings);
+            var geometry = current.Geometry(quick);
+            var rect = Bounds(hwnd);
+            return Math.Abs(geometry.Width - width) <= 2 &&
+                Math.Abs((rect.Right - rect.Left) / Scale(hwnd) - width) <= 2 &&
+                Math.Abs(geometry.Height - initial.Geometry(quick).Height) <= 2 &&
+                current.Geometry(!quick) == initial.Geometry(!quick) &&
+                Native.GetForegroundWindow() == foreground;
+        }
+        Wait(() => WidthMatches(minimum), $"{label} native right-edge shrink reaches minimum without changing other geometry or focus");
+        var atMinimum = Preferences.Load(settings);
+        VerifyPopupGeometry(hwnd, atMinimum.Geometry(quick));
+        before = Bounds(hwnd);
+        var monitor = Native.MonitorFromRect(ref before, 2);
+        var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
+        if (!Native.GetMonitorInfo(monitor, ref info)) throw Native.Error("GetMonitorInfo");
+        var expansion = (int)Math.Round(45 * scale);
+        y = (before.Top + before.Bottom) / 2;
+        if (before.Left - info.Work.Left >= expansion)
+            Drag(before.Left + inset, y, before.Left + inset - expansion, y);
+        else if (info.Work.Right - before.Right >= expansion)
+            Drag(before.Right - inset, y, before.Right - inset + expansion, y);
+        else throw new InvalidOperationException("The test desktop cannot expand the popup.");
+        Wait(() => WidthMatches(minimum + 45), $"{label} native horizontal expansion persists independently and preserves focus");
+        VerifyPopupGeometry(hwnd, Preferences.Load(settings).Geometry(quick));
     }
 
     private static void DragAndResize(nint hwnd, string settings)
@@ -331,6 +378,7 @@ internal static partial class InstalledFlow
             return Math.Abs(height - oldHeight) > 10 &&
                 Math.Abs((actual.Bottom - actual.Top) / Scale(hwnd) - height) <= 2;
         }, "mouse resized bottom edge and persisted height");
+        ResizeHorizontal(hwnd, settings, false, hwnd);
     }
 
     internal static void Drag(int x, int y, int endX, int endY)
