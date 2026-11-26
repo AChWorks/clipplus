@@ -162,6 +162,7 @@ internal static partial class Program
             foreach (var name in new[] { "Choose color, current Green", "Unpin", "Delete clip", "Paste clip", "Change category: Long category نمونه فارسی" })
                 Fits(Find(row, name), row, 22);
             VerifyPanelSpacing(popup, false, "ordinary compact narrow");
+            VerifyRoundedPanel(popup, "ordinary compact narrow");
             SavePopupEvidence(popup, "categories-compact-narrow");
 
             var swatch = Find(row, "Choose color, current Green");
@@ -225,6 +226,7 @@ internal static partial class Program
             Fits(toggle, popup, 26);
             Fits(icon, popup, 18);
             VerifyPanelSpacing(popup, false, "quick narrow light");
+            VerifyRoundedPanel(popup, "quick narrow light");
             SavePopupEvidence(popup, "quick-narrow-light");
             popup.ApplyTheme(true, false);
             VerifyPanelSpacing(popup, false, "quick narrow dark");

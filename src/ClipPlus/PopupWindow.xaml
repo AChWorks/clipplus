@@ -4,13 +4,13 @@
         xmlns:local="clr-namespace:ClipPlus"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="ClipPlus" Icon="Assets/ClipPlus.ico" Width="360" Height="520" MinHeight="240"
-        WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="False"
-        WindowStartupLocation="Manual" Topmost="True" Background="{DynamicResource PanelBrush}"
+        WindowStyle="None" AllowsTransparency="True" ResizeMode="CanResize" ShowInTaskbar="False"
+        WindowStartupLocation="Manual" Topmost="True" Background="Transparent"
         Foreground="{DynamicResource TextBrush}" FontFamily="Segoe UI" FontSize="13"
         UseLayoutRounding="True">
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6"
-                            GlassFrameThickness="0" CornerRadius="8" />
+                            GlassFrameThickness="0" CornerRadius="0" />
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
         <ResourceDictionary>
@@ -214,7 +214,12 @@
     </Window.Resources>
     <!-- One balanced content inset and one shared scrollbar column. Keep
          the native resize border clear and the card width stable on overflow. -->
-    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}" Padding="8,9,8,7">
+    <!-- WPF's alpha surface is the sole owner of the visible rounded
+         perimeter. WindowChrome retains native move/resize hit testing,
+         without an independently rounded (integer-pixel) window region. -->
+    <Border x:Name="PanelSurface" CornerRadius="8" BorderThickness="1"
+            Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}"
+            Padding="8,9,8,7" RenderOptions.ClearTypeHint="Enabled">
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>

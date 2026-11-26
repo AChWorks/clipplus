@@ -10,26 +10,29 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Assets/ClipPlusIcon.xaml"/>
             </ResourceDictionary.MergedDictionaries>
+            <!-- The shape is a local visual resource, not a persisted setting.
+                 The visual acceptance test renders both requested alternatives. -->
+            <CornerRadius x:Key="FloatingRadius">10</CornerRadius>
         </ResourceDictionary>
     </Window.Resources>
     <Button x:Name="FloatingButton" Focusable="False" Cursor="Hand"
             AutomationProperties.Name="Open pinned clipboard"
             ToolTip="Click to open; drag to move"
-            Background="{DynamicResource FloatingIdleBrush}"
-            BorderBrush="{DynamicResource FloatingBorderBrush}" BorderThickness="1">
+            Background="{DynamicResource FloatingSurfaceBrush}"
+            BorderBrush="{DynamicResource FloatingOutlineBrush}" BorderThickness="1">
         <Button.Template>
             <ControlTemplate TargetType="Button">
-                <Border x:Name="Surface" CornerRadius="11" Background="{TemplateBinding Background}"
+                <!-- A single surface; no nested solid blue app tile. -->
+                <Border x:Name="Surface" CornerRadius="{DynamicResource FloatingRadius}"
+                        Background="{TemplateBinding Background}"
                         BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-                    <Image Source="{StaticResource ClipPlusHeaderIcon}" Width="28" Height="28"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Rectangle Width="38" Height="38" Fill="{DynamicResource FloatingGlyphBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Rectangle.OpacityMask>
+                            <ImageBrush ImageSource="{StaticResource ClipPlusFloatingGlyph}" Stretch="Uniform"/>
+                        </Rectangle.OpacityMask>
+                    </Rectangle>
                 </Border>
-                <ControlTemplate.Triggers>
-                    <Trigger Property="IsMouseOver" Value="True">
-                        <Setter TargetName="Surface" Property="Background" Value="{DynamicResource FloatingHoverBrush}"/>
-                        <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FloatingFocusBrush}"/>
-                    </Trigger>
-                </ControlTemplate.Triggers>
             </ControlTemplate>
         </Button.Template>
     </Button>

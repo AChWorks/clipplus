@@ -32,29 +32,29 @@ jobs:
         run: |
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | Format-List
           New-Item -ItemType Directory -Path TestResults -Force | Out-Null
-          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v023'
-          git fetch --no-tags origin refs/tags/v0.2.3:refs/tags/v0.2.3
+          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v024'
+          git fetch --no-tags origin refs/tags/v0.2.4:refs/tags/v0.2.4
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git worktree add --detach $baseline 0594f3cc9fc58304ff3e8575beeff804c4e5bcfc
+          git worktree add --detach $baseline 6f0f9e0acd6f6927bac3f20204baa0ab0b9e8386
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           try {
             $source = Join-Path $baseline 'tests/ClipPlus.WindowsSmoke'
             Copy-Item tests/ClipPlus.WindowsSmoke/Program.Benchmark.cs $source
             dotnet build (Join-Path $source 'ClipPlus.WindowsSmoke.csproj') -c Release
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v023.txt
+            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v024.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v024.txt
+            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v025.txt
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            foreach ($file in @('TestResults/performance-v023.txt','TestResults/performance-v024.txt')) {
+            foreach ($file in @('TestResults/performance-v024.txt','TestResults/performance-v025.txt')) {
               if (-not (Select-String -Path $file -Pattern 'BENCH first-open-recent') -or
                   -not (Select-String -Path $file -Pattern 'BENCH idle-quick-expanded') -or
                   -not (Select-String -Path $file -Pattern 'BENCH motion-quick-expanded')) {
                 throw "Interactive WPF benchmark incomplete: $file"
               }
             }
-            if (-not (Select-String -Path TestResults/performance-v024.txt -Pattern 'BENCH floating-expand-final') -or
-                -not (Select-String -Path TestResults/performance-v024.txt -Pattern 'BENCH idle-floating-after-cycles')) {
+            if (-not (Select-String -Path TestResults/performance-v025.txt -Pattern 'BENCH floating-expand-final') -or
+                -not (Select-String -Path TestResults/performance-v025.txt -Pattern 'BENCH idle-floating-after-cycles')) {
               throw 'Floating transition and resource measurements did not run.'
             }
           } finally { git worktree remove --force $baseline }

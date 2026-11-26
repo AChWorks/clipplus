@@ -68,11 +68,13 @@ internal static partial class Program
                 Descendants<ListBoxItem>(list).Count() < 50,
                 "quick list excludes recent clips and virtualizes hundreds of pins");
             VerifyPanelSpacing(popup, true, "quick overflowing");
+            VerifyRoundedPanel(popup, "quick overflowing");
             SavePopupEvidence(popup, "quick-overflow");
             foreach (var theme in new[] { (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
             {
                 popup.ApplyTheme(theme.Dark, theme.Contrast);
                 VerifyPanelSpacing(popup, true, "quick overflow " + theme.Name);
+                VerifyRoundedPanel(popup, "quick overflow " + theme.Name);
                 SavePopupEvidence(popup, "quick-spacing-" + theme.Name);
             }
             popup.ApplyTheme(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
@@ -159,6 +161,7 @@ internal static partial class Program
                 "outside click collapses the panel and still reaches the target button exactly once");
             var icon = Application.Current.Windows.OfType<FloatingIconWindow>().Single(w => w.IsVisible);
             Check(popup.IsQuickMode && !popup.IsVisible && icon.IsVisible, "floating mode retains quick session");
+            VerifyGlassIcon(icon, (int)center.X, (int)center.Y);
             foreach (var theme in new[] { (Dark: false, Contrast: false, Name: "light"), (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
             {
                 icon.ApplyTheme(theme.Dark, theme.Contrast);
