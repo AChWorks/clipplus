@@ -15,21 +15,21 @@
     <Button x:Name="FloatingButton" Focusable="False" Cursor="Hand"
             AutomationProperties.Name="Open pinned clipboard"
             ToolTip="Click to open; drag to move"
-            Background="{DynamicResource FloatingIdleBrush}"
-            BorderBrush="{DynamicResource FloatingBorderBrush}" BorderThickness="1">
+            BorderThickness="0" Padding="0">
         <Button.Template>
             <ControlTemplate TargetType="Button">
-                <Border x:Name="Surface" CornerRadius="11" Background="{TemplateBinding Background}"
-                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-                    <Image Source="{StaticResource ClipPlusHeaderIcon}" Width="28" Height="28"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <ControlTemplate.Triggers>
-                    <Trigger Property="IsMouseOver" Value="True">
-                        <Setter TargetName="Surface" Property="Background" Value="{DynamicResource FloatingHoverBrush}"/>
-                        <Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource FloatingFocusBrush}"/>
-                    </Trigger>
-                </ControlTemplate.Triggers>
+                <!-- One borderless circular alpha surface, with the canonical
+                     clipboard glyph instead of a second, opaque app tile. -->
+                <Grid>
+                    <Ellipse x:Name="Surface" Fill="{TemplateBinding Background}"/>
+                    <Rectangle Width="38" Height="38" Fill="{TemplateBinding Foreground}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False">
+                        <Rectangle.OpacityMask>
+                            <ImageBrush ImageSource="{StaticResource ClipPlusFloatingGlyph}" Stretch="Uniform"/>
+                        </Rectangle.OpacityMask>
+                    </Rectangle>
+                </Grid>
             </ControlTemplate>
         </Button.Template>
     </Button>

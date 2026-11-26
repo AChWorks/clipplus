@@ -363,13 +363,20 @@ internal static partial class Program
             "edge-scrolled drag reaches previously hidden final category and persists intended order");
     }
 
-    private static void SavePopupEvidence(Window popup, string name)
+    private static RenderTargetBitmap RenderPopup(Window popup)
     {
         popup.UpdateLayout();
         var dpi = VisualTreeHelper.GetDpi(popup);
         var image = new RenderTargetBitmap((int)Math.Ceiling(popup.ActualWidth * dpi.DpiScaleX),
             (int)Math.Ceiling(popup.ActualHeight * dpi.DpiScaleY), 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
         image.Render(popup);
+        return image;
+    }
+
+    private static void SavePopupEvidence(Window popup, string name) => SaveImageEvidence(RenderPopup(popup), name);
+
+    private static void SaveImageEvidence(BitmapSource image, string name)
+    {
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(image));
         Directory.CreateDirectory("TestResults");

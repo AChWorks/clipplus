@@ -68,11 +68,13 @@ internal static partial class Program
                 Descendants<ListBoxItem>(list).Count() < 50,
                 "quick list excludes recent clips and virtualizes hundreds of pins");
             VerifyPanelSpacing(popup, true, "quick overflowing");
+            VerifyRoundedPanel(popup, "quick overflowing");
             SavePopupEvidence(popup, "quick-overflow");
             foreach (var theme in new[] { (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
             {
                 popup.ApplyTheme(theme.Dark, theme.Contrast);
                 VerifyPanelSpacing(popup, true, "quick overflow " + theme.Name);
+                VerifyRoundedPanel(popup, "quick overflow " + theme.Name);
                 SavePopupEvidence(popup, "quick-spacing-" + theme.Name);
             }
             popup.ApplyTheme(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
@@ -159,15 +161,33 @@ internal static partial class Program
                 "outside click collapses the panel and still reaches the target button exactly once");
             var icon = Application.Current.Windows.OfType<FloatingIconWindow>().Single(w => w.IsVisible);
             Check(popup.IsQuickMode && !popup.IsVisible && icon.IsVisible, "floating mode retains quick session");
-            foreach (var theme in new[] { (Dark: false, Contrast: false, Name: "light"), (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
+            VerifyGlassIcon(icon, (int)center.X, (int)center.Y);
+            try
             {
-                icon.ApplyTheme(theme.Dark, theme.Contrast);
-                SavePopupEvidence(icon, "quick-floating-" + theme.Name);
+                foreach (var theme in new[] { (Dark: false, Contrast: false, Name: "light"), (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
+                {
+                    icon.Resources[SystemParameters.HighContrastKey] = theme.Contrast;
+                    icon.ApplyTheme(theme.Dark);
+                    SavePopupEvidence(icon, "quick-floating-" + theme.Name);
+                }
             }
+            finally { icon.Resources.Remove(SystemParameters.HighContrastKey); }
             set(get() with { AutoCollapseQuickPanel = false });
             popup.QuickBehaviorChanged();
             Check(popup.IsVisible && !icon.IsVisible && popup.IsQuickMode && Native.GetForegroundWindow() == targetHwnd,
                 "always-expanded setting restores the full panel without activating it");
+            var floatingButton = (Button)icon.FindName("FloatingButton");
+            Check(icon.ReadLocalValue(FloatingIconWindow.SystemHighContrastProperty) == DependencyProperty.UnsetValue &&
+                floatingButton.ReadLocalValue(Control.BackgroundProperty) == DependencyProperty.UnsetValue &&
+                floatingButton.ReadLocalValue(Control.ForegroundProperty) == DependencyProperty.UnsetValue &&
+                floatingButton.Opacity == 1 &&
+                !DependencyPropertyHelper.GetValueSource(floatingButton, UIElement.OpacityProperty).IsAnimated,
+                "hiding the icon detaches the contrast resource and cancels its fade");
+            // Change the local system resource while hidden. There must be
+            // no active contrast subscription until the icon is shown again.
+            icon.Resources[SystemParameters.HighContrastKey] = true;
+            Check(icon.ReadLocalValue(FloatingIconWindow.SystemHighContrastProperty) == DependencyProperty.UnsetValue,
+                "hidden icon does not reattach contrast tracking on resource change");
             ClickTarget();
             PumpUntil(() => clicks == 3);
             Check(clicks == 3 && popup.IsVisible && !icon.IsVisible, "switching to always-expanded stops automatic collapse");
@@ -176,6 +196,10 @@ internal static partial class Program
             ClickTarget();
             PumpUntil(() => clicks == 4 && icon.IsVisible);
             Check(clicks == 4 && icon.IsVisible && !popup.IsVisible, "re-enabling floating mode restores outside-click detection");
+            Check(floatingButton.Opacity == 1 && floatingButton.Background is SolidColorBrush contrastFill &&
+                contrastFill.Color == SystemColors.HighlightColor,
+                "reopened icon reads the current live contrast resource");
+            icon.Resources.Remove(SystemParameters.HighContrastKey);
             var list = (ListBox)popup.FindName("ClipList");
             var search = (TextBox)popup.FindName("SearchBox");
             var query = search.Text;
@@ -223,6 +247,12 @@ internal static partial class Program
             Check(!icon.IsVisible && !popup.IsVisible && !popup.IsQuickMode &&
                 !Application.Current.Windows.OfType<FloatingIconWindow>().Any(),
                 "closing the quick session releases its floating window after stop recovery");
+            Check(icon.ReadLocalValue(FloatingIconWindow.SystemHighContrastProperty) == DependencyProperty.UnsetValue &&
+                floatingButton.ReadLocalValue(Control.BackgroundProperty) == DependencyProperty.UnsetValue &&
+                floatingButton.ReadLocalValue(Control.ForegroundProperty) == DependencyProperty.UnsetValue &&
+                floatingButton.Opacity == 1 &&
+                !DependencyPropertyHelper.GetValueSource(floatingButton, UIElement.OpacityProperty).IsAnimated,
+                "closing the floating window releases live contrast tracking and opacity animation");
         }
         finally { target.Close(); }
     }

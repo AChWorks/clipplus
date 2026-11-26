@@ -74,7 +74,7 @@ public partial class PopupWindow
                 ? new Native.Point { X = rect.Left, Y = rect.Top }
                 : new Native.Point { X = saved.X, Y = saved.Y });
             ApplyTheme();
-            _floatingIcon.ApplyTheme(_dark, _highContrast);
+            _floatingIcon.ApplyTheme(_dark);
             var actual = _floatingIcon.ShowAt(anchor);
             if (saved is null && _floatingAnchor is null) SaveIconPosition(actual);
             else _floatingAnchor = actual;

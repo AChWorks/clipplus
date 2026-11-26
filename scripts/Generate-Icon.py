@@ -104,13 +104,10 @@ def image(size):
             png_chunk(b"IEND", b""))
 
 
-def write_drawing():
-    # Preserve the SVG's full square viewport, including transparent padding.
+def drawing_image(key, shapes):
+    # Preserve the full SVG viewport so header and glyph align identically.
     lines = [
-        '<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"',
-        '                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">',
-        '    <!-- Generated from ClipPlus.svg by scripts/Generate-Icon.py. -->',
-        '    <DrawingImage x:Key="ClipPlusHeaderIcon">',
+        f'    <DrawingImage x:Key="{key}">',
         '        <DrawingImage.Drawing>',
         '            <DrawingGroup>',
         '                <GeometryDrawing Brush="Transparent">',
@@ -119,7 +116,7 @@ def write_drawing():
         '                    </GeometryDrawing.Geometry>',
         '                </GeometryDrawing>',
     ]
-    for kind, g, fill, stroke, thickness in SHAPES:
+    for kind, g, fill, stroke, thickness in shapes:
         brush = f' Brush="{fill}"' if fill != "none" else ""
         lines.append(f'                <GeometryDrawing{brush}>')
         lines.append('                    <GeometryDrawing.Geometry>')
@@ -137,8 +134,21 @@ def write_drawing():
                 '                    </GeometryDrawing.Pen>',
             ])
         lines.append('                </GeometryDrawing>')
-    lines.extend(['            </DrawingGroup>', '        </DrawingImage.Drawing>',
-                  '    </DrawingImage>', '</ResourceDictionary>'])
+    lines.extend(['            </DrawingGroup>', '        </DrawingImage.Drawing>', '    </DrawingImage>'])
+    return lines
+
+
+def write_drawing():
+    lines = [
+        '<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"',
+        '                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">',
+        '    <!-- Generated from ClipPlus.svg by scripts/Generate-Icon.py. -->',
+    ]
+    lines.extend(drawing_image("ClipPlusHeaderIcon", SHAPES))
+    # The SVG's first primitive is its blue brand tile. The floating
+    # window uses the remaining canonical clipboard mark as an alpha mask.
+    lines.extend(drawing_image("ClipPlusFloatingGlyph", SHAPES[1:]))
+    lines.append('</ResourceDictionary>')
     (ASSETS / "ClipPlusIcon.xaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

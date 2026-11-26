@@ -1,14 +1,31 @@
 using System;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Threading;
 
 namespace ClipPlus;
 
 public partial class FloatingIconWindow : Window
 {
     internal const double IconSize = 42;
+    internal const double IdleOpacity = 0.45;
+    private readonly DispatcherTimer _fadeDelay = new() { Interval = TimeSpan.FromMilliseconds(850) };
+    // A native dynamic system resource, attached only while visible.
+    // WPF invalidates it on accessibility changes without a static event
+    // retaining the window or another worker observing system settings.
+    internal static readonly DependencyProperty SystemHighContrastProperty =
+        DependencyProperty.Register("SystemHighContrast", typeof(bool), typeof(FloatingIconWindow),
+            new PropertyMetadata(false, (owner, _) =>
+            {
+                var icon = (FloatingIconWindow)owner;
+                if (icon.IsVisible) icon.RefreshTheme();
+            }));
+    private bool HighContrast => (bool)GetValue(SystemHighContrastProperty);
+    private bool _dark;
     private readonly Action _open;
     private readonly Action<Native.Point> _moved;
     private readonly Action<string, Exception?> _report;
@@ -25,6 +42,28 @@ public partial class FloatingIconWindow : Window
         _windowHook = WindowMessage;
         InitializeComponent();
         Width = Height = IconSize;
+        _fadeDelay.Tick += (_, _) =>
+        {
+            _fadeDelay.Stop();
+            if (!IsVisible || _moving || FloatingButton.IsMouseOver || HighContrast) return;
+            var from = FloatingButton.Opacity;
+            FloatingButton.Opacity = IdleOpacity;
+            if (SystemParameters.ClientAreaAnimation)
+                FloatingButton.BeginAnimation(OpacityProperty, new DoubleAnimation(from, IdleOpacity,
+                    new Duration(TimeSpan.FromMilliseconds(180))) { FillBehavior = FillBehavior.Stop });
+        };
+        FloatingButton.MouseEnter += (_, _) => ShowClearly();
+        FloatingButton.MouseLeave += (_, _) => ScheduleFade();
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible)
+            {
+                SetResourceReference(SystemHighContrastProperty, SystemParameters.HighContrastKey);
+                RefreshTheme();
+            }
+            else StopAppearanceTracking();
+        };
+        Closed += (_, _) => StopAppearanceTracking();
         SourceInitialized += (_, _) =>
         {
             Native.SetNoActivate(Handle, true);
@@ -70,6 +109,7 @@ public partial class FloatingIconWindow : Window
         if (!Native.GetWindowRect(Handle, out _dragStart)) throw Native.Error("Read floating icon position");
         _moving = true;
         _dragged = false;
+        ShowClearly();
         try
         {
             // Use the same native move loop as the expanded panel. Unlike
@@ -84,7 +124,11 @@ public partial class FloatingIconWindow : Window
                 cursor.Y >= bounds.Top && cursor.Y < bounds.Bottom)
                 _open();
         }
-        finally { _moving = false; }
+        finally
+        {
+            _moving = false;
+            ScheduleFade();
+        }
     }
 
     internal Native.Point Position
@@ -102,15 +146,51 @@ public partial class FloatingIconWindow : Window
         catch (Exception ex) { _report("Could not use the floating clipboard icon.", ex); }
     }
 
-    internal void ApplyTheme(bool dark, bool highContrast)
+    private void ShowClearly()
     {
-        Brush Solid(string value) => new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
-        Resources["FloatingIdleBrush"] = highContrast ? SystemColors.WindowBrush :
-            new LinearGradientBrush((Color)ColorConverter.ConvertFromString(dark ? "#ED393D44" : "#F5FFFFFF"),
-                (Color)ColorConverter.ConvertFromString(dark ? "#CF202226" : "#CCE4EAF2"), 90);
-        Resources["FloatingHoverBrush"] = highContrast ? SystemColors.ControlBrush : Solid(dark ? "#F03C4048" : "#F5FFFFFF");
-        Resources["FloatingBorderBrush"] = highContrast ? SystemColors.WindowTextBrush : Solid(dark ? "#D0787D86" : "#C8A8B6C9");
-        Resources["FloatingFocusBrush"] = highContrast ? SystemColors.HighlightBrush : Solid(dark ? "#9BC9FF" : "#2562A8");
+        _fadeDelay.Stop();
+        FloatingButton.BeginAnimation(OpacityProperty, null);
+        FloatingButton.Opacity = 1;
+    }
+
+    private void ScheduleFade()
+    {
+        _fadeDelay.Stop();
+        if (IsVisible && !_moving && !FloatingButton.IsMouseOver && !HighContrast &&
+            FloatingButton.Opacity > IdleOpacity)
+            _fadeDelay.Start();
+    }
+
+    private void StopAppearanceTracking()
+    {
+        ClearValue(SystemHighContrastProperty);
+        FloatingButton.ClearValue(Control.BackgroundProperty);
+        FloatingButton.ClearValue(Control.ForegroundProperty);
+        ShowClearly();
+    }
+
+    internal void ApplyTheme(bool dark)
+    {
+        _dark = dark;
+        if (IsVisible) RefreshTheme();
+    }
+
+    private void RefreshTheme()
+    {
+        ShowClearly(); // Cancels an active fade before applying contrast colors.
+        if (HighContrast)
+        {
+            // Keep the system palette live even between two contrast themes.
+            FloatingButton.SetResourceReference(Control.BackgroundProperty, SystemColors.HighlightBrushKey);
+            FloatingButton.SetResourceReference(Control.ForegroundProperty, SystemColors.HighlightTextBrushKey);
+        }
+        else
+        {
+            FloatingButton.Background = new LinearGradientBrush((Color)ColorConverter.ConvertFromString(_dark ? "#497FF5" : "#4A82F9"),
+                (Color)ColorConverter.ConvertFromString(_dark ? "#2159CF" : "#245ADE"), 90);
+            FloatingButton.Foreground = Brushes.White;
+            ScheduleFade();
+        }
     }
 
     internal Native.Point ShowAt(Native.Point anchor)

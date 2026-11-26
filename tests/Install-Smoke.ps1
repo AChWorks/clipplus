@@ -6,7 +6,8 @@ param([Parameter(Mandatory)][string]$Setup,[Parameter(Mandatory)][string]$Portab
       [Parameter(Mandatory)][string]$PreviousSetup,
       [Parameter(Mandatory)][string]$StableSetup,
       [Parameter(Mandatory)][string]$QuickSetup,
-      [Parameter(Mandatory)][string]$WidthSetup)
+      [Parameter(Mandatory)][string]$WidthSetup,
+      [Parameter(Mandatory)][string]$FloatingSetup)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -43,6 +44,11 @@ $widthFile = (Get-Item -LiteralPath $WidthSetup).FullName
 $widthExeHash = 'AFF8ADADA7BB93C44E2EAB15729D8F4DBF6211A9FEEBD38D70BD10C0AB694099'
 if ((Get-FileHash -LiteralPath $widthFile -Algorithm SHA256).Hash -ne '7ECA888EF7FC484AFD2D59CF37BE32FA02649B4B8EEC58C2BEFA810DBE76D29B') {
     throw 'Released v0.2.3 installer checksum mismatch.'
+}
+$floatingFile = (Get-Item -LiteralPath $FloatingSetup).FullName
+$floatingExeHash = 'A8E49D7337A095105E5BF7239FF39B2BA647025A49C091911253D8B42C14364C'
+if ((Get-FileHash -LiteralPath $floatingFile -Algorithm SHA256).Hash -ne '0645A9AEAFE1F120E948D0816A3A7919EF7B0C6B17EF013EC1DE5C05FE5351F1') {
+    throw 'Released v0.2.4 installer checksum mismatch.'
 }
 $legacySetupHash = '587266B81DB63244C54DE969832B59C02BE18FD83D4CBC6335D9530E89408D83'
 $legacyExeHash = '36C6BCB7EFDE4E50BA6E5D489781C5B24223F9A0B9DC4B632E32F21C304416C0'
@@ -947,7 +953,8 @@ try {
     foreach ($release in @(
         @{Version='v0.2.1'; Setup=$stableFile; ExeHash=$stableExeHash; Geometry='ordinary'},
         @{Version='v0.2.2'; Setup=$quickFile; ExeHash=$quickExeHash; Geometry='quick'},
-        @{Version='v0.2.3'; Setup=$widthFile; ExeHash=$widthExeHash; Geometry='width'}
+        @{Version='v0.2.3'; Setup=$widthFile; ExeHash=$widthExeHash; Geometry='width'},
+        @{Version='v0.2.4'; Setup=$floatingFile; ExeHash=$floatingExeHash; Geometry='floating'}
     )) {
         & $testExe --isolated-desktop --empty-fixture-clipboard
         if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }
@@ -965,6 +972,7 @@ try {
         $seedArgs = @('--isolated-desktop','--seed-v020-profile')
         if ($release.Geometry -eq 'quick') { $seedArgs += '--with-quick-geometry' }
         if ($release.Geometry -eq 'width') { $seedArgs += '--with-width-geometry' }
+        if ($release.Geometry -eq 'floating') { $seedArgs += '--with-floating-geometry' }
         & $testExe @seedArgs --database $database --profile administrator
         if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable protected profile.' }
         & $testExe @seedArgs --database $normalDb --profile normal
