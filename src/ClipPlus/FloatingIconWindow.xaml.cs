@@ -140,19 +140,18 @@ public partial class FloatingIconWindow : Window
     private void ScheduleFade()
     {
         _fadeDelay.Stop();
-        if (IsVisible && !_moving && !FloatingButton.IsMouseOver && !_highContrast)
+        if (IsVisible && !_moving && !FloatingButton.IsMouseOver && !_highContrast &&
+            FloatingButton.Opacity > IdleOpacity)
             _fadeDelay.Start();
     }
 
     internal void ApplyTheme(bool dark, bool highContrast)
     {
-        Brush Solid(string value) => new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
         _highContrast = highContrast;
-        Resources["FloatingSurfaceBrush"] = highContrast ? SystemColors.WindowBrush :
+        Resources["FloatingSurfaceBrush"] = highContrast ? SystemColors.HighlightBrush :
             new LinearGradientBrush((Color)ColorConverter.ConvertFromString(dark ? "#497FF5" : "#4A82F9"),
                 (Color)ColorConverter.ConvertFromString(dark ? "#2159CF" : "#245ADE"), 90);
-        Resources["FloatingGlyphBrush"] = highContrast ? SystemColors.WindowTextBrush : Brushes.White;
-        Resources["FloatingOutlineBrush"] = highContrast ? SystemColors.WindowTextBrush : Solid("#60FFFFFF");
+        Resources["FloatingGlyphBrush"] = highContrast ? SystemColors.HighlightTextBrush : Brushes.White;
         ShowClearly();
         ScheduleFade();
     }

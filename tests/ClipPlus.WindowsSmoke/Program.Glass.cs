@@ -31,86 +31,86 @@ internal static partial class Program
     private static void VerifyGlassIcon(FloatingIconWindow icon, int outsideX, int outsideY)
     {
         var button = (Button)icon.FindName("FloatingButton");
-        var defaultRadius = (CornerRadius)icon.Resources["FloatingRadius"];
-        var previews = new List<(string Name, BitmapSource Idle, BitmapSource Hover)>();
         void Move(int x, int y) => Check(Native.SetCursorPos(x, y), "move pointer for glass icon test");
+        var center = button.PointToScreen(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
         try
         {
-            foreach (var shape in new[] { (Name: "radius10", Radius: 10.0), (Name: "circle", Radius: FloatingIconWindow.IconSize / 2) })
+            // Test the selected production silhouette rather than shipping or
+            // dynamically switching between the discarded design alternatives.
+            foreach (var theme in new[] { (Dark: false, Name: "light"), (Dark: true, Name: "dark") })
             {
-                icon.Resources["FloatingRadius"] = new CornerRadius(shape.Radius);
-                icon.ApplyTheme(false, false);
                 Move(outsideX, outsideY);
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
+                icon.ApplyTheme(theme.Dark, false);
+                icon.UpdateLayout();
+                var surface = (System.Windows.Shapes.Ellipse)button.Template.FindName("Surface", button);
+                Check(surface.Stroke is null && button.BorderThickness == new Thickness(0),
+                    theme.Name + ": circular icon has no decorative border or second tile");
                 InstalledFlow.Pump(TimeSpan.FromMilliseconds(160));
-                Check(Math.Abs(button.Opacity - 1) < 0.001, shape.Name + ": no immediate dimming after pointer leaves");
+                Check(button.Opacity == 1, theme.Name + ": no immediate dimming");
                 PumpUntil(() => Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001);
-                Check(Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001, shape.Name + ": delayed idle fade completes");
+                Check(Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001,
+                    theme.Name + ": delayed idle fade completes");
                 var idle = RenderPopup(icon);
                 var w = idle.PixelWidth;
                 var h = idle.PixelHeight;
                 var idleAlpha = PixelAlpha(idle, w / 2, h / 2);
                 Check(idleAlpha >= 110 && idleAlpha <= 120 && PixelAlpha(idle, 0, 0) == 0,
-                    shape.Name + ": actual per-pixel transparency across glyph and glass surface");
-                SaveImageEvidence(idle, "quick-glass-" + shape.Name + "-idle");
+                    theme.Name + ": actual per-pixel transparency across glyph and glass surface");
+                SaveImageEvidence(idle, "quick-glass-" + theme.Name + "-idle");
 
-                var center = button.PointToScreen(new Point(button.ActualWidth / 2, button.ActualHeight / 2));
                 Move((int)center.X, (int)center.Y);
                 PumpUntil(() => button.IsMouseOver && button.Opacity == 1);
-                Check(button.IsMouseOver && button.Opacity == 1, shape.Name + ": hover restores full opacity");
+                Check(button.IsMouseOver && button.Opacity == 1, theme.Name + ": hover restores full opacity");
                 InstalledFlow.Pump(TimeSpan.FromMilliseconds(1100));
-                Check(button.Opacity == 1, shape.Name + ": hover remains fully clear beyond idle delay");
+                Check(button.Opacity == 1, theme.Name + ": hover remains fully clear beyond idle delay");
                 var hover = RenderPopup(icon);
-                Check(PixelAlpha(hover, w / 2, h / 2) == 255 && PixelAlpha(hover, 0, 0) == 0,
-                    shape.Name + ": full hover opacity with transparent corner");
-                // At quarter-size offsets, a 10-DIP corner is filled while
-                // a 21-DIP circular corner is not. Both use the same glyph.
+                Check(PixelAlpha(hover, w / 2, h / 2) == 255 &&
+                    PixelAlpha(hover, 0, 0) == 0 && PixelAlpha(hover, w - 1, 0) == 0 &&
+                    PixelAlpha(hover, 0, h - 1) == 0 && PixelAlpha(hover, w - 1, h - 1) == 0,
+                    theme.Name + ": full hover opacity with four transparent corners");
                 var offset = Math.Max(1, (int)Math.Round(w * 0.095));
-                var shapeAlpha = PixelAlpha(hover, offset, offset);
-                Check(shape.Radius == 10 ? shapeAlpha >= 200 : shapeAlpha <= 20,
-                    shape.Name + ": requested silhouette is actually rendered");
-                SaveImageEvidence(hover, "quick-glass-" + shape.Name + "-hover");
-                previews.Add((shape.Name, idle, hover));
+                Check(PixelAlpha(hover, offset, offset) <= 20 &&
+                    PixelAlpha(hover, w / 2, h / 8) >= 250,
+                    theme.Name + ": circle silhouette is actually rendered");
+                SaveImageEvidence(hover, "quick-glass-" + theme.Name + "-hover");
                 Move(outsideX, outsideY);
                 InstalledFlow.Pump(TimeSpan.FromMilliseconds(150));
-                Check(button.Opacity == 1, shape.Name + ": pointer departure retains opacity until delay");
+                Check(button.Opacity == 1, theme.Name + ": pointer departure retains opacity until delay");
                 PumpUntil(() => Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001);
-                Check(Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001, shape.Name + ": leaving hover restarts fade");
-            }
+                Check(Math.Abs(button.Opacity - FloatingIconWindow.IdleOpacity) < 0.001,
+                    theme.Name + ": leaving hover restarts fade");
 
-            // Composite the actual WPF alpha renders over a synthetic
-            // background. No desktop recording or product screen capture.
-            var visual = new DrawingVisual();
-            using (var dc = visual.RenderOpen())
-            {
-                dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, 380, 168));
-                for (var row = 0; row < previews.Count; row++)
+                // Composite actual WPF alpha renders over a synthetic
+                // backdrop to demonstrate transparency, not backdrop blur.
+                var visual = new DrawingVisual();
+                using (var dc = visual.RenderOpen())
                 {
-                    var preview = previews[row];
-                    var y = row * 84.0;
-                    for (var column = 0; column < 4; column++)
+                    var background = new SolidColorBrush(theme.Dark ? Color.FromRgb(34, 39, 49) : Color.FromRgb(239, 244, 249));
+                    var stripe = new SolidColorBrush(theme.Dark ? Color.FromRgb(84, 97, 113) : Color.FromRgb(201, 212, 227));
+                    dc.DrawRectangle(background, null, new Rect(0, 0, 190, 84));
+                    for (var column = 0; column < 2; column++)
                     {
                         var x = column * 95.0;
-                        var dark = column >= 2;
-                        dc.DrawRectangle(dark ? new SolidColorBrush(Color.FromRgb(34, 39, 49)) : new SolidColorBrush(Color.FromRgb(239, 244, 249)), null,
-                            new Rect(x, y, 95, 84));
-                        var stripe = dark ? new SolidColorBrush(Color.FromRgb(84, 97, 113)) : new SolidColorBrush(Color.FromRgb(201, 212, 227));
                         for (var line = 0; line < 5; line++)
-                            dc.DrawRoundedRectangle(stripe, null, new Rect(x + 5, y + 10 + line * 15, 82 - line % 2 * 15, 4), 2, 2);
-                        dc.DrawImage(column % 2 == 0 ? preview.Idle : preview.Hover, new Rect(x + 19.5, y + 14, 56, 56));
+                            dc.DrawRoundedRectangle(stripe, null, new Rect(x + 5, 10 + line * 15, 82 - line % 2 * 15, 4), 2, 2);
+                        dc.DrawImage(column == 0 ? idle : hover, new Rect(x + 19.5, 14, 56, 56));
                     }
                 }
+                var comparison = new RenderTargetBitmap(190, 84, 96, 96, PixelFormats.Pbgra32);
+                comparison.Render(visual);
+                SaveImageEvidence(comparison, "quick-glass-preview-" + theme.Name);
             }
-            var comparison = new RenderTargetBitmap(380, 168, 96, 96, PixelFormats.Pbgra32);
-            comparison.Render(visual);
-            SaveImageEvidence(comparison, "quick-glass-comparison");
 
             icon.ApplyTheme(false, true);
             InstalledFlow.Pump(TimeSpan.FromMilliseconds(1200));
             Check(button.Opacity == 1, "high contrast icon remains fully visible while idle");
+            Check(button.Background is SolidColorBrush fill && fill.Color == SystemColors.HighlightColor &&
+                button.Foreground is SolidColorBrush glyph && glyph.Color == SystemColors.HighlightTextColor,
+                "high contrast uses the system highlight and matching text brush without a border");
         }
         finally
         {
-            icon.Resources["FloatingRadius"] = defaultRadius;
             icon.ApplyTheme(false, false);
             Move(outsideX, outsideY);
         }

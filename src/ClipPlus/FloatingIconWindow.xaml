@@ -10,29 +10,27 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Assets/ClipPlusIcon.xaml"/>
             </ResourceDictionary.MergedDictionaries>
-            <!-- The shape is a local visual resource, not a persisted setting.
-                 The visual acceptance test renders both requested alternatives. -->
-            <CornerRadius x:Key="FloatingRadius">10</CornerRadius>
         </ResourceDictionary>
     </Window.Resources>
     <Button x:Name="FloatingButton" Focusable="False" Cursor="Hand"
             AutomationProperties.Name="Open pinned clipboard"
             ToolTip="Click to open; drag to move"
             Background="{DynamicResource FloatingSurfaceBrush}"
-            BorderBrush="{DynamicResource FloatingOutlineBrush}" BorderThickness="1">
+            Foreground="{DynamicResource FloatingGlyphBrush}" BorderThickness="0" Padding="0">
         <Button.Template>
             <ControlTemplate TargetType="Button">
-                <!-- A single surface; no nested solid blue app tile. -->
-                <Border x:Name="Surface" CornerRadius="{DynamicResource FloatingRadius}"
-                        Background="{TemplateBinding Background}"
-                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-                    <Rectangle Width="38" Height="38" Fill="{DynamicResource FloatingGlyphBrush}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                <!-- One borderless circular alpha surface, with the canonical
+                     clipboard glyph instead of a second, opaque app tile. -->
+                <Grid>
+                    <Ellipse x:Name="Surface" Fill="{TemplateBinding Background}"/>
+                    <Rectangle Width="38" Height="38" Fill="{TemplateBinding Foreground}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False">
                         <Rectangle.OpacityMask>
                             <ImageBrush ImageSource="{StaticResource ClipPlusFloatingGlyph}" Stretch="Uniform"/>
                         </Rectangle.OpacityMask>
                     </Rectangle>
-                </Border>
+                </Grid>
             </ControlTemplate>
         </Button.Template>
     </Button>

@@ -59,7 +59,20 @@ internal static partial class Program
                 legacySettings.WindowHeight, legacySettings.WindowPosition, legacySettings.Shortcut,
                 QuickPanel = quickGeometry, legacySettings.CompactView, legacySettings.ActiveView
             };
-            object settingsValue = args.Contains("--with-width-geometry")
+            object settingsValue = args.Contains("--with-floating-geometry")
+                ? new Preferences
+                {
+                    WindowHeight = legacySettings.WindowHeight,
+                    WindowPosition = legacySettings.WindowPosition,
+                    Shortcut = Shortcut.CtrlShiftV,
+                    QuickPanel = quickGeometry,
+                    AutoCollapseQuickPanel = name == "normal",
+                    FloatingPosition = new WindowPosition(name == "normal" ? 190 : 260, 110),
+                    CompactView = legacySettings.CompactView,
+                    ActiveView = legacySettings.ActiveView,
+                    WindowWidth = name == "normal" ? 310d : 420d
+                }
+                : args.Contains("--with-width-geometry")
                 ? new
                 {
                     quickSettings.WindowHeight, quickSettings.WindowPosition, quickSettings.Shortcut,
