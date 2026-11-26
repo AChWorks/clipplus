@@ -41,6 +41,7 @@ internal static partial class Program
 
         if (args.Contains("--seed-v020-profile") || args.Contains("--snapshot-v020-profile")) return ProfileFixture(args);
         if (args.Contains("--popup-benchmark")) return PopupBenchmark();
+        if (args.Contains("--outside-input-probe")) return OutsideInputProbe();
 
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         using var first = new HwndSource(new HwndSourceParameters("ClipPlus smoke sender") { WindowStyle = 0 });

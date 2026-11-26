@@ -1,0 +1,22 @@
+name: Isolated passive input transport probe
+on:
+  push:
+    branches: [fix/floating-idle-observation]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build isolated test harness
+        run: dotnet build tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release
+      - name: Probe actual queued button coordinates after idle
+        shell: pwsh
+        run: |
+          & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --outside-input-probe
+          exit $LASTEXITCODE
