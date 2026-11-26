@@ -14,11 +14,11 @@ internal static partial class Program
         var preferences = new Preferences();
         long pasted = 0;
         var succeeded = false;
-        var popup = new PopupWindow(store, _ => Task.CompletedTask, (_, _) => { },
+        var popup = new PopupWindow(store, _ => Task.CompletedTask,
+            (geometry, quick) => preferences = preferences.WithGeometry(geometry, quick),
             (message, error) => { if (error is not null) throw new InvalidOperationException(message, error); },
             () => preferences, (view, compact) => preferences = preferences with { ActiveView = view, CompactView = compact },
-            (id, _) => { pasted = id; return Task.FromResult(succeeded); },
-            geometry => preferences = preferences with { QuickPanel = geometry });
+            (id, _) => { pasted = id; return Task.FromResult(succeeded); });
         var list = (ListBox)popup.FindName("ClipList");
         var search = (TextBox)popup.FindName("SearchBox");
         var toggle = (Button)popup.FindName("QuickModeButton");

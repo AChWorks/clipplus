@@ -266,14 +266,10 @@ internal static partial class InstalledFlow
 
             // Resize and drag with actual native pointer input while the
             // external target remains foreground. Check independent settings.
+            ResizeHorizontal(popup, settings, true, hwnd);
             var before = Bounds(popup);
             var scale = Scale(popup);
             var inset = Math.Max(2, (int)Math.Round(3 * scale));
-            Drag(before.Right - inset, (before.Top + before.Bottom) / 2,
-                before.Right - inset - (int)Math.Round(35 * scale), (before.Top + before.Bottom) / 2);
-            Wait(() => Math.Abs(Preferences.Load(settings).QuickPanel.Width - normal.QuickPanel.Width) > 10 &&
-                Native.GetForegroundWindow() == hwnd, "quick horizontal resize persists without stealing focus");
-            before = Bounds(popup);
             Drag((before.Left + before.Right) / 2, before.Bottom - inset,
                 (before.Left + before.Right) / 2, before.Bottom - inset - (int)Math.Round(50 * scale));
             Wait(() => Math.Abs(Preferences.Load(settings).QuickPanel.Height - normal.QuickPanel.Height) > 10 &&
@@ -290,10 +286,10 @@ internal static partial class InstalledFlow
             Wait(() => Math.Abs(Bounds(popup).Left - before.Left) > 10 &&
                 Native.GetForegroundWindow() == hwnd, "quick header drag preserves foreground");
             var saved = Preferences.Load(settings);
-            if (saved.WindowPosition != normal.WindowPosition || saved.WindowHeight != normal.WindowHeight ||
+            if (saved.Geometry(false) != normal.Geometry(false) ||
                 saved.QuickPanel.Position is null)
                 throw new InvalidOperationException("Quick panel changed ordinary geometry or did not persist position.");
-            VerifyQuickGeometry(popup, saved.QuickPanel);
+            VerifyPopupGeometry(popup, saved.QuickPanel);
             PointerClick(QuickRequire(popup, "Return to clipboard history"));
             Wait(() => Native.GetForegroundWindow() == popup && !Native.IsNoActivate(popup) && QuickFind(popup, "Search clipboard") is not null,
                 "toggle returns to ordinary popup");
@@ -329,24 +325,13 @@ internal static partial class InstalledFlow
         return application.Run(window);
     }
 
-    private static void VerifyQuickGeometry(nint hwnd, QuickGeometry saved)
-    {
-        var bounds = Bounds(hwnd);
-        var position = saved.Position ?? throw new InvalidOperationException("No saved quick geometry.");
-        var scale = Scale(hwnd);
-        if (Math.Abs(bounds.Left - position.X) > 2 || Math.Abs(bounds.Top - position.Y) > 2 ||
-            Math.Abs((bounds.Right - bounds.Left) / scale - saved.Width) > 2 ||
-            Math.Abs((bounds.Bottom - bounds.Top) / scale - saved.Height) > 2)
-            throw new InvalidOperationException("Quick panel bounds differ from independently saved geometry.");
-    }
-
     private static void VerifyQuickRestart(nint popup, nint target, string settings)
     {
         var preferences = Preferences.Load(settings);
         PointerClick(QuickRequire(popup, "Open pinned quick-paste panel"));
         Wait(() => Native.GetForegroundWindow() == target && QuickFind(popup, "Search pinned clips") is not null,
             "restarted application enters quick mode only on explicit toggle");
-        VerifyQuickGeometry(popup, preferences.QuickPanel);
+        VerifyPopupGeometry(popup, preferences.QuickPanel);
         PointerClick(QuickRequire(popup, "Return to clipboard history"));
         Wait(() => Native.GetForegroundWindow() == popup && QuickFind(popup, "Search clipboard") is not null,
             "restarted application restores independent normal geometry");

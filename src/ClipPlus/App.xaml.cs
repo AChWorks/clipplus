@@ -69,7 +69,7 @@ public partial class App : Application
             _clipboard = new WindowsClipboard(_messages.Handle);
             _shortcut = new ShortcutManager(_messages.Handle);
             _popup = new PopupWindow(_store, PasteNormalAsync, SaveGeometry, Report, () => _preferences, SaveView,
-                PasteQuickAsync, SaveQuickGeometry);
+                PasteQuickAsync);
             _popup.Closed += (_, _) => { if (!_exiting) Shutdown(); };
             MainWindow = _popup;
             CreateTray();
@@ -197,9 +197,9 @@ public partial class App : Application
         menu.Items.Add(new Forms.ToolStripMenuItem("ClipPlus " + typeof(App).Assembly.GetName().Version) { Enabled = false });
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Dispatcher.BeginInvoke(new Action(() => Shutdown())));
-        // The same embedded icon is used by the EXE, the WPF window and tray.
+        // Select the small native ICO frame instead of scaling the default frame.
         using (var iconStream = GetResourceStream(new Uri("pack://application:,,,/Assets/ClipPlus.ico")).Stream)
-        using (var icon = new System.Drawing.Icon(iconStream))
+        using (var icon = new System.Drawing.Icon(iconStream, Forms.SystemInformation.SmallIconSize))
             _trayIcon = (System.Drawing.Icon)icon.Clone();
         _tray = new Forms.NotifyIcon
         {
@@ -430,20 +430,9 @@ public partial class App : Application
         return false;
     }
 
-    private void SaveQuickGeometry(QuickGeometry geometry)
+    private void SaveGeometry(PopupGeometry geometry, bool quick)
     {
-        if (_preferences.QuickPanel == geometry) return;
-        _preferences = _preferences with { QuickPanel = geometry };
-        SavePreferences();
-    }
-
-    private void SaveGeometry(double? height, WindowPosition? position)
-    {
-        var next = _preferences with
-        {
-            WindowHeight = height ?? _preferences.WindowHeight,
-            WindowPosition = position ?? _preferences.WindowPosition
-        };
+        var next = _preferences.WithGeometry(geometry, quick);
         if (next == _preferences) return;
         _preferences = next;
         SavePreferences();

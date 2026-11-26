@@ -291,6 +291,15 @@ internal static partial class Program
             fit = PopupWindow.FitBounds(large, 1, new Native.Point { X = 1900, Y = 1000 }, 650, false);
             Check(fit.Right == large.Right && fit.Bottom == large.Bottom && fit.Bottom - fit.Top == 650,
                 "larger destination restores preferred height");
+            fit = PopupWindow.FitBounds(large, 1, anchor, 400, false, 50);
+            Check(fit.Right - fit.Left == 260, "ordinary width respects useful minimum");
+            fit = PopupWindow.FitBounds(large, 1, anchor, 400, false, 50, true);
+            Check(fit.Right - fit.Left == 160, "quick width respects useful minimum");
+            fit = PopupWindow.FitBounds(large, 1, anchor, 400, false, 650);
+            Check(fit.Right - fit.Left == 650, "ordinary expansion is not capped at the previous fixed width");
+            var tiny = new Native.Rect { Left = -200, Top = 0, Right = 0, Bottom = 720 };
+            fit = PopupWindow.FitBounds(tiny, 1.5, anchor, 400, false, 650);
+            Check(fit.Left == tiny.Left && fit.Right == tiny.Right, "available monitor width takes precedence over preferred minimum");
             search.Text = "";
             foreach (var category in store.Categories()) store.DeleteCategory(category.Id);
             foreach (var clip in store.List().Where(item => item.Pinned)) store.SetPinned(clip.Id, false);
@@ -307,6 +316,7 @@ internal static partial class Program
             popup.HidePopup();
             popup.Close();
             VerifyQuickVisual();
+            VerifyWidthAndHover();
             Console.WriteLine("Windows smoke checks completed; physical hotkey, interactive paste, elevation, resize and lifecycle still require desktop acceptance.");
             return 0;
         }

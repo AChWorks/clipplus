@@ -7,7 +7,6 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Shell;
 using ClipPlus.Core;
 
 namespace ClipPlus;
@@ -59,13 +58,6 @@ public partial class PopupWindow
         SearchPlaceholder.Text = quick ? "Search pins..." : "Search clipboard...";
         AutomationProperties.SetName(SearchBox, quick ? "Search pinned clips" : "Search clipboard");
         AutomationProperties.SetName(ClipList, quick ? "Pinned quick-paste clips" : "Clipboard history");
-        var chrome = WindowChrome.GetWindowChrome(this);
-        if (chrome.IsFrozen)
-        {
-            chrome = (WindowChrome)chrome.CloneCurrentValue();
-            WindowChrome.SetWindowChrome(this, chrome);
-        }
-        chrome.ResizeBorderThickness = quick ? new Thickness(6) : new Thickness(0, 6, 0, 6);
         Native.SetNoActivate(Handle, quick);
     }
 
@@ -84,7 +76,7 @@ public partial class PopupWindow
                 var preferences = _preferences();
                 var anchor = preferences.WindowPosition is { } position
                     ? new Native.Point { X = position.X, Y = position.Y } : _normalOrigin;
-                PlaceWindow(hwnd, Native.MonitorFromPoint(anchor, 2), anchor, preferences.WindowHeight, false);
+                PlaceWindow(hwnd, Native.MonitorFromPoint(anchor, 2), anchor, preferences.WindowHeight, false, preferences.WindowWidth);
                 Refresh(false);
                 RevealActiveCategory();
                 Activate();

@@ -52,7 +52,16 @@ internal static partial class Program
             var legacySettings = new { WindowHeight = name == "normal" ? 410d : 470d,
                 WindowPosition = new WindowPosition(25, 40), Shortcut = "CtrlShiftV",
                 CompactView = name == "normal", ActiveView = (long?)category };
-            File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(legacySettings,
+            object settingsValue = args.Contains("--with-quick-geometry")
+                ? new
+                {
+                    legacySettings.WindowHeight, legacySettings.WindowPosition, legacySettings.Shortcut,
+                    QuickPanel = new PopupGeometry(name == "normal" ? 205 : 240, name == "normal" ? 385 : 355,
+                        new WindowPosition(55, 75)),
+                    legacySettings.CompactView, legacySettings.ActiveView
+                }
+                : legacySettings;
+            File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(settingsValue,
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             return 0;
         }

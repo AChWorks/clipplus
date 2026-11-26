@@ -34,23 +34,43 @@ public sealed class CategoryTests
     }
 
     [Fact]
-    public void QuickGeometryPersistsIndependentlyAndOldPreferencesLoad()
+    public void PopupGeometryPersistsIndependentlyAndOldPreferencesLoad()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "settings.json");
         try
         {
-            File.WriteAllText(path, "{\"WindowHeight\":650,\"WindowPosition\":{\"X\":-400,\"Y\":50}}");
+            File.WriteAllText(path, """{"WindowHeight":650,"WindowPosition":{"X":-400,"Y":50}}""");
             var original = Preferences.Load(path);
-            Assert.Equal(650, original.WindowHeight);
-            Assert.Equal(new WindowPosition(-400, 50), original.WindowPosition);
-            Assert.Equal(new QuickGeometry(260, 420, null), original.QuickPanel);
-            var updated = original with { QuickPanel = new QuickGeometry(280, 350, new WindowPosition(120, 30)) };
+            Assert.Equal(new PopupGeometry(360, 650, new WindowPosition(-400, 50)), original.Geometry(false));
+            Assert.Equal(new PopupGeometry(260, 420, null), original.Geometry(true));
+
+            // Existing v0.2.2 settings already contain independent quick
+            // geometry, but do not yet contain WindowWidth.
+            File.WriteAllText(path, """{"WindowHeight":650,"WindowPosition":{"X":-400,"Y":50},"QuickPanel":{"Width":225,"Height":390,"Position":{"X":120,"Y":30}},"CompactView":true,"ActiveView":7}""");
+            var previous = Preferences.Load(path);
+            Assert.Equal(original.Geometry(false), previous.Geometry(false));
+            Assert.Equal(new PopupGeometry(225, 390, new WindowPosition(120, 30)), previous.Geometry(true));
+            Assert.True(previous.CompactView);
+            Assert.Equal(7L, previous.ActiveView);
+
+            var normal = new PopupGeometry(290, 600, new WindowPosition(-450, 60));
+            var quick = new PopupGeometry(180, 350, new WindowPosition(140, 40));
+            var normalOnly = previous.WithGeometry(normal, false);
+            Assert.Equal(previous.Geometry(true), normalOnly.Geometry(true));
+            var updated = normalOnly.WithGeometry(quick, true);
+            Assert.Equal(normal, updated.Geometry(false));
+            Assert.Equal(quick, updated.Geometry(true));
+            Assert.Equal(previous.CompactView, updated.CompactView);
+            Assert.Equal(previous.ActiveView, updated.ActiveView);
             updated.Save(path);
             Assert.Equal(updated, Preferences.Load(path));
-            Assert.Equal(original.WindowPosition, updated.WindowPosition);
-            Assert.Equal(original.WindowHeight, updated.WindowHeight);
+
+            File.WriteAllText(path, """{"WindowWidth":-1,"WindowHeight":0,"QuickPanel":{"Width":0,"Height":420,"Position":null}}""");
+            var invalid = Preferences.Load(path);
+            Assert.Equal(new PopupGeometry(360, 520, null), invalid.Geometry(false));
+            Assert.Equal(new PopupGeometry(260, 420, null), invalid.Geometry(true));
         }
         finally { Directory.Delete(directory, true); }
     }

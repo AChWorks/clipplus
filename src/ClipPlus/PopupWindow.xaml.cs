@@ -22,12 +22,11 @@ public partial class PopupWindow : Window
 {
     private readonly ClipStore _store;
     private readonly Func<long, Task> _paste;
-    private readonly Action<double?, WindowPosition?> _saveGeometry;
+    private readonly Action<PopupGeometry, bool> _saveGeometry;
     private readonly Action<string, Exception?> _report;
     private readonly Func<Preferences> _preferences;
     private readonly Action<long, bool> _saveView;
     private readonly Func<long, Native.PasteTarget?, Task<bool>>? _quickPaste;
-    private readonly Action<QuickGeometry>? _saveQuickGeometry;
     private readonly HwndSourceHook _windowHook;
     private readonly Dictionary<long, Row> _rows = new();
     private ObservableCollection<HistoryEntry> _entries = new();
@@ -35,8 +34,9 @@ public partial class PopupWindow : Window
     // view invalidates affected cards even when clip metadata is unchanged.
     internal sealed record HistoryEntry(ClipItem Item, string? Heading, string? CategoryName, bool Compact, bool Quick = false);
     private readonly DispatcherTimer _paletteTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
+    private readonly DispatcherTimer _paletteHoverTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(5) };
-    private Row? _openPalette;
+    private Row? _openPalette, _hoverPalette;
     private Row? _editingRow;
     private TextBox? _titleEditor;
     private bool _placing, _refreshing, _refreshPending, _dark, _highContrast, _themeApplied;
@@ -66,9 +66,9 @@ public partial class PopupWindow : Window
         internal bool PreviewAttempted;
     }
 
-    internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<double?, WindowPosition?> saveGeometry,
+    internal PopupWindow(ClipStore store, Func<long, Task> paste, Action<PopupGeometry, bool> saveGeometry,
         Action<string, Exception?> report, Func<Preferences> preferences, Action<long, bool> saveView,
-        Func<long, Native.PasteTarget?, Task<bool>>? quickPaste = null, Action<QuickGeometry>? saveQuickGeometry = null)
+        Func<long, Native.PasteTarget?, Task<bool>>? quickPaste = null)
     {
         _store = store;
         _paste = paste;
@@ -77,7 +77,6 @@ public partial class PopupWindow : Window
         _preferences = preferences;
         _saveView = saveView;
         _quickPaste = quickPaste;
-        _saveQuickGeometry = saveQuickGeometry;
         // Keep the hook rooted for the entire HWND lifetime.
         _windowHook = OnWindowMessage;
         InitializeComponent();
@@ -132,7 +131,12 @@ public partial class PopupWindow : Window
         ClipList.SelectionChanged += (_, _) => PreviewSelected();
         PreviewKeyDown += OnKey;
         InputManager.Current.PostProcessInput += OnPostProcessInput;
-        Closed += (_, _) => InputManager.Current.PostProcessInput -= OnPostProcessInput;
+        Closed += (_, _) =>
+        {
+            CancelPaletteHover();
+            _paletteTimer.Stop();
+            InputManager.Current.PostProcessInput -= OnPostProcessInput;
+        };
         Deactivated += (_, _) =>
         {
             if (IsQuickMode)
@@ -150,8 +154,14 @@ public partial class PopupWindow : Window
                 !row.Swatch.IsKeyboardFocusWithin && !row.Palette.IsKeyboardFocusWithin)
             {
                 if (Mouse.LeftButton == MouseButtonState.Pressed) RequestInteractionReconciliation();
-                else ClosePalette();
+                else ClosePalette(cancelHover: false);
             }
+        };
+        _paletteHoverTimer.Tick += (_, _) =>
+        {
+            var row = _hoverPalette;
+            CancelPaletteHover();
+            if (row is not null && CanHoverPalette(row)) Run(() => OpenPalette(row));
         };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusLabel.Visibility = Visibility.Collapsed; };
         SourceInitialized += (_, _) => HwndSource.FromHwnd(Handle)?.AddHook(_windowHook);
@@ -192,32 +202,25 @@ public partial class PopupWindow : Window
             if (!Native.GetWindowRect(hwnd, out var rect)) return 0;
             var moved = rect.Left != _moveStart.Left || rect.Top != _moveStart.Top;
             var resized = _userSizing && rect.Bottom - rect.Top != _moveStart.Bottom - _moveStart.Top;
-            var widthChanged = IsQuickMode && _userSizing && rect.Right - rect.Left != _moveStart.Right - _moveStart.Left;
+            var widthChanged = _userSizing && rect.Right - rect.Left != _moveStart.Right - _moveStart.Left;
             if ((!moved || !(_userMoving || _userSizing)) && !resized && !widthChanged) return 0;
             var monitor = Native.MonitorFromRect(ref rect, 2);
             var scale = MonitorScale(monitor);
             double? height = resized ? (rect.Bottom - rect.Top) / scale : null;
             // Reuse the opening placement path on the destination monitor,
-            // preserving the requested (unclamped) height across displays.
+            // preserving the requested (unclamped) size across displays.
             Run(() =>
             {
                 _placing = true;
                 try
                 {
                     var anchor = new Native.Point { X = rect.Left, Y = rect.Top };
-                    if (IsQuickMode)
-                    {
-                        var previous = _preferences().QuickPanel;
-                        var width = widthChanged ? (rect.Right - rect.Left) / scale : previous.Width;
-                        var quickHeight = height ?? previous.Height;
-                        var actual = PlaceWindow(hwnd, monitor, anchor, quickHeight, false, width);
-                        _saveQuickGeometry?.Invoke(new QuickGeometry(width, quickHeight, new WindowPosition(actual.X, actual.Y)));
-                    }
-                    else
-                    {
-                        var actual = PlaceWindow(hwnd, monitor, anchor, height ?? _preferences().WindowHeight, false);
-                        _saveGeometry(height, new WindowPosition(actual.X, actual.Y));
-                    }
+                    var quick = IsQuickMode;
+                    var previous = _preferences().Geometry(quick);
+                    var width = widthChanged ? (rect.Right - rect.Left) / scale : previous.Width;
+                    var preferredHeight = height ?? previous.Height;
+                    var actual = PlaceWindow(hwnd, monitor, anchor, preferredHeight, false, width);
+                    _saveGeometry(new PopupGeometry(width, preferredHeight, new WindowPosition(actual.X, actual.Y)), quick);
                 }
                 finally { _placing = false; }
             });
@@ -251,10 +254,10 @@ public partial class PopupWindow : Window
                 anchor = new Native.Point { X = position.X, Y = position.Y };
             var monitor = Native.MonitorFromPoint(anchor, 2);
             var hwnd = new WindowInteropHelper(this).EnsureHandle();
-            PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null);
+            PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null, preferences.WindowWidth);
             Show();
             RevealActiveCategory();
-            PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null);
+            PlaceWindow(hwnd, monitor, anchor, preferences.WindowHeight, position is null, preferences.WindowWidth);
             Activate();
             if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
             FocusSearch();
@@ -274,14 +277,18 @@ public partial class PopupWindow : Window
     private static double MonitorScale(nint monitor) =>
         Native.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 && dpiX > 0 ? dpiX / 96.0 : 1.0;
 
+    // Keep the original initial widths; each mode can be narrowed by 100 DIP.
+    private static double MinimumWidth(bool quick) =>
+        (quick ? Preferences.DefaultQuickWidth : Preferences.DefaultNormalWidth) - 100;
+
     // One placement calculation for initial contextual placement, restored
     // coordinates and the end of a native move/resize operation.
     internal static Native.Rect FitBounds(Native.Rect work, double scale, Native.Point anchor,
-        double preferredHeight, bool contextual, double preferredWidth = 360, bool quick = false)
+        double preferredHeight, bool contextual, double preferredWidth = Preferences.DefaultNormalWidth, bool quick = false)
     {
         var availableWidth = work.Right - work.Left;
         var width = Math.Min(availableWidth, (int)Math.Round(Clamp(preferredWidth,
-            Math.Min(quick ? 180 : 360, availableWidth / scale), availableWidth / scale) * scale));
+            Math.Min(MinimumWidth(quick), availableWidth / scale), availableWidth / scale) * scale));
         var available = work.Bottom - work.Top;
         var height = Math.Min(available, (int)Math.Round(Clamp(preferredHeight,
             Math.Min(quick ? 150 : 240, available / scale), available / scale) * scale));
@@ -292,7 +299,7 @@ public partial class PopupWindow : Window
         return new Native.Rect { Left = x, Top = top, Right = x + width, Bottom = top + height };
     }
 
-    private Native.Point PlaceWindow(nint hwnd, nint monitor, Native.Point anchor, double preferredHeight, bool contextual, double preferredWidth = 360)
+    private Native.Point PlaceWindow(nint hwnd, nint monitor, Native.Point anchor, double preferredHeight, bool contextual, double preferredWidth)
     {
         var info = new Native.MonitorInfo { Size = (uint)Marshal.SizeOf<Native.MonitorInfo>() };
         if (monitor == 0 || !Native.GetMonitorInfo(monitor, ref info))
@@ -302,8 +309,8 @@ public partial class PopupWindow : Window
         var availableWidth = (work.Right - work.Left) / scale;
         var available = (work.Bottom - work.Top) / scale;
         MinWidth = 0;
-        MaxWidth = IsQuickMode ? availableWidth : Math.Min(360, availableWidth);
-        MinWidth = Math.Min(IsQuickMode ? 180 : 360, MaxWidth);
+        MaxWidth = availableWidth;
+        MinWidth = Math.Min(MinimumWidth(IsQuickMode), MaxWidth);
         Width = Clamp(preferredWidth, MinWidth, MaxWidth);
         MinHeight = 0;
         MaxHeight = available;
@@ -373,7 +380,7 @@ public partial class PopupWindow : Window
                 if (_openCategoryRow is { } picker && !picker.CategoryButton.IsKeyboardFocusWithin &&
                     !picker.CategoryPicker.IsKeyboardFocusWithin) CloseCategoryPicker(false);
                 if (_openPalette is { } palette && !palette.Swatch.IsMouseOver && !palette.Palette.IsMouseOver &&
-                    !palette.Swatch.IsKeyboardFocusWithin && !palette.Palette.IsKeyboardFocusWithin) ClosePalette(false);
+                    !palette.Swatch.IsKeyboardFocusWithin && !palette.Palette.IsKeyboardFocusWithin) ClosePalette(false, cancelHover: false);
                 FlushPendingHistory();
             });
         }));
@@ -411,6 +418,7 @@ public partial class PopupWindow : Window
             container.Content = null;
             return;
         }
+        CancelPaletteHover(row);
         if (_editingRow == row) EndTitle(false, false);
         if (_openPalette == row) ClosePalette(false);
         if (_openCategoryRow == row) CloseCategoryPicker(false);
@@ -526,7 +534,7 @@ public partial class PopupWindow : Window
         header.Children.Add(titleHost);
         var title = new Button
         {
-            HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(3, 1, 3, 1),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(3, 1, 3, 1),
             FontWeight = FontWeights.SemiBold, FontSize = 12, ToolTip = "Click to edit title"
         };
         titleHost.Children.Add(title);
@@ -550,9 +558,24 @@ public partial class PopupWindow : Window
             paste.Click += async (_, _) => await _paste(item.Id);
             Grid.SetColumn(categoryButton, 5);
             header.Children.Add(categoryButton);
+            // At the narrower ordinary width, let the category label trim
+            // before it consumes the title. Fixed native actions stay usable.
+            header.SizeChanged += (_, _) =>
+            {
+                if (header.ActualWidth <= 0) return;
+                var actionsWidth = swatch.Width + pin.Width + delete.Width + paste.Width;
+                categoryButton.MaxWidth = Math.Max(28, header.ActualWidth - actionsWidth - 48);
+            };
         }
 
-        var choices = new UniformGrid { Columns = ((ClipColor[])Enum.GetValues(typeof(ClipColor))).Length };
+        var colorCount = ((ClipColor[])Enum.GetValues(typeof(ClipColor))).Length;
+        var choices = new UniformGrid { Columns = colorCount };
+        choices.SizeChanged += (_, _) =>
+        {
+            if (choices.ActualWidth <= 0) return;
+            var columns = Clamp((int)(choices.ActualWidth / 24), 1, colorCount);
+            if (choices.Columns != columns) choices.Columns = columns;
+        };
         var palette = new Border
         {
             Child = choices, Visibility = Visibility.Collapsed, CornerRadius = new CornerRadius(5),
@@ -617,13 +640,12 @@ public partial class PopupWindow : Window
             Refresh();
             FocusSearch();
         });
-        swatch.MouseEnter += (_, _) => { if (Mouse.LeftButton == MouseButtonState.Released && _editingRow is null &&
-            _categoryEditor is null && _openCategoryRow is null) OpenPalette(row); };
-        swatch.MouseLeave += (_, _) => StartPaletteTimer();
-        swatch.LostKeyboardFocus += (_, _) => StartPaletteTimer();
-        palette.MouseLeave += (_, _) => StartPaletteTimer();
-        palette.MouseEnter += (_, _) => _paletteTimer.Stop();
-        palette.LostKeyboardFocus += (_, _) => StartPaletteTimer();
+        swatch.MouseEnter += (_, _) => SchedulePaletteHover(row);
+        swatch.MouseLeave += (_, _) => { CancelPaletteHover(row); StartPaletteTimer(row); };
+        swatch.LostKeyboardFocus += (_, _) => StartPaletteTimer(row);
+        palette.MouseLeave += (_, _) => StartPaletteTimer(row);
+        palette.MouseEnter += (_, _) => { if (_openPalette == row) _paletteTimer.Stop(); };
+        palette.LostKeyboardFocus += (_, _) => StartPaletteTimer(row);
         swatch.Click += (_, _) =>
         {
             OpenPalette(row);
@@ -691,6 +713,7 @@ public partial class PopupWindow : Window
         };
         label.SetResourceReference(ForegroundProperty, row.Item.Title.Length == 0 ? "MutedBrush" : "TextBrush");
         row.Title.Content = label;
+        row.Title.ToolTip = row.Item.DisplayTitle + "\nClick to edit title";
         AutomationProperties.SetName(row.Title, $"Edit title: {row.Item.DisplayTitle}");
         AutomationProperties.SetName(row.Container, $"{row.Item.DisplayTitle}{(row.Item.Pinned ? ", pinned" : "")}");
     }
@@ -744,8 +767,31 @@ public partial class PopupWindow : Window
         }
     }
 
+    private bool CanHoverPalette(Row row) =>
+        IsVisible && !IsQuickMode && IsActive && row.Swatch.IsMouseOver &&
+        Mouse.LeftButton == MouseButtonState.Released && _editingRow is null &&
+        _categoryEditor is null && _openCategoryRow is null &&
+        _rows.TryGetValue(row.Item.Id, out var current) && current == row;
+
+    private void SchedulePaletteHover(Row row)
+    {
+        CancelPaletteHover();
+        if (_openPalette == row) { _paletteTimer.Stop(); return; }
+        if (!CanHoverPalette(row)) return;
+        _hoverPalette = row;
+        _paletteHoverTimer.Start();
+    }
+
+    private void CancelPaletteHover(Row? row = null)
+    {
+        if (row is not null && _hoverPalette != row) return;
+        _paletteHoverTimer.Stop();
+        _hoverPalette = null;
+    }
+
     private void OpenPalette(Row row)
     {
+        CancelPaletteHover();
         if (_openPalette == row) { _paletteTimer.Stop(); return; }
         ClosePalette(false);
         CloseCategoryPicker(false);
@@ -796,14 +842,16 @@ public partial class PopupWindow : Window
         AutomationProperties.SetName(row.Swatch, $"Choose color, current {row.Item.Color}");
     }
 
-    private void StartPaletteTimer()
+    private void StartPaletteTimer(Row row)
     {
+        if (_openPalette != row) return;
         _paletteTimer.Stop();
         _paletteTimer.Start();
     }
 
-    private void ClosePalette(bool processPending = true)
+    private void ClosePalette(bool processPending = true, bool cancelHover = true)
     {
+        if (cancelHover) CancelPaletteHover();
         _paletteTimer.Stop();
         if (_openPalette is not { } row) return;
         _openPalette = null;
@@ -956,6 +1004,7 @@ public partial class PopupWindow : Window
             Resources["FieldBrush"] = SystemColors.WindowBrush;
             Resources["CardBrush"] = SystemColors.WindowBrush;
             Resources["SelectedBrush"] = SystemColors.WindowBrush;
+            Resources["CategoryIdleBrush"] = SystemColors.WindowBrush;
             Resources["CategorySelectedBrush"] = SystemColors.HighlightBrush;
             Resources["CategorySelectedTextBrush"] = SystemColors.HighlightTextBrush;
             Resources["CategorySelectedFocusBrush"] = SystemColors.HighlightTextBrush;
@@ -976,6 +1025,7 @@ public partial class PopupWindow : Window
         Set("CardBrush", "#FFFFFF", "#2B2B2B");
         Set("SelectedBrush", "#EAF2FF", "#363E4A");
         Set("HoverBrush", "#E8E8E8", "#414141");
+        Set("CategoryIdleBrush", "#FFFFFF", "#2B2B2B");
         Set("CategorySelectedBrush", "#DDDDDD", "#484848");
         Set("CategorySelectedTextBrush", "#1D1D1D", "#F4F4F4");
         Set("CategorySelectedFocusBrush", "#2562A8", "#9BC9FF");

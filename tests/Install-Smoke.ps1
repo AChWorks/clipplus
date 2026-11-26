@@ -4,7 +4,8 @@ param([Parameter(Mandatory)][string]$Setup,[Parameter(Mandatory)][string]$Portab
       [Parameter(Mandatory)][string]$FaultSetup,
       [Parameter(Mandatory)][string]$LegacySetup,
       [Parameter(Mandatory)][string]$PreviousSetup,
-      [Parameter(Mandatory)][string]$StableSetup)
+      [Parameter(Mandatory)][string]$StableSetup,
+      [Parameter(Mandatory)][string]$QuickSetup)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -31,6 +32,11 @@ $stableFile = (Get-Item -LiteralPath $StableSetup).FullName
 $stableExeHash = '7A4A278ACD94E24B3F8E28505F014D0144707DE8F00D0022C0669286429D6326'
 if ((Get-FileHash -LiteralPath $stableFile -Algorithm SHA256).Hash -ne '5F1BD346811693C75D54CA88707CB268DED311C93A78B94AD3199C002383EA3E') {
     throw 'Released v0.2.1 installer checksum mismatch.'
+}
+$quickFile = (Get-Item -LiteralPath $QuickSetup).FullName
+$quickExeHash = 'E99C263B4B9D1A64A5E1900D44D3B7959893A3E0F36DFF42976705571D71CEF7'
+if ((Get-FileHash -LiteralPath $quickFile -Algorithm SHA256).Hash -ne '4B86FD12BEA66DD11D37323715EEA4F4F0C7E734596142E53D3BA1DF69519261') {
+    throw 'Released v0.2.2 installer checksum mismatch.'
 }
 $legacySetupHash = '587266B81DB63244C54DE969832B59C02BE18FD83D4CBC6335D9530E89408D83'
 $legacyExeHash = '36C6BCB7EFDE4E50BA6E5D489781C5B24223F9A0B9DC4B632E32F21C304416C0'
@@ -930,65 +936,71 @@ try {
         }
     }
 
-    # Upgrade the current published release with its existing user shortcut.
-    # Its installer is unmodified; an old helper failure is visible, not retried away.
-    & $testExe --isolated-desktop --empty-fixture-clipboard
-    if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }
-    Invoke-Wizard $stableFile "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
-    $installed = $true
-    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $stableExeHash -or
-        -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
-        (Test-Path -LiteralPath $context.LegacyShortcut)) {
-        throw 'Expected exact released v0.2.1 and its user shortcut.'
-    }
-    Stop-ClipPlus $context
-    & $testExe --isolated-desktop --seed-v020-profile --database $database --profile administrator
-    if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable protected profile.' }
-    & $testExe --isolated-desktop --seed-v020-profile --database $normalDb --profile normal
-    if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable normal profile.' }
-    $adminBefore = Snapshot-Profile $database
-    $normalBefore = Snapshot-Profile $normalDb
-    $oldLinkHash = (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash
-    $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
-    $oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
-    $oldUninstallerHash = (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash
-    Start-ClipPlusAndVerify $context
-    Assert-UnchangedProfiles $adminBefore $normalBefore 'Released v0.2.1 startup'
-    Invoke-FailedWizard 'after-activation' ''
-    Assert-UnchangedProfiles $adminBefore $normalBefore 'Released v0.2.1 rollback'
-    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $stableExeHash -or
-        (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
-        (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
-        (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarkerHash -or
-        (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash -ne $oldUninstallerHash -or
-        (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-        throw 'v0.2.1 rollback did not preserve exact prior resources and both profiles.'
-    }
-    Install-Wizard
-    if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $portableFile -Algorithm SHA256).Hash -or
-        -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
-        (Get-OwnedTask $context).Principal.RunLevel -ne 'Highest' -or
-        -not (Get-StartupEnabled (Get-OwnedTask $context)) -or
-        (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-        throw 'v0.2.1 update changed existing profiles, startup or shortcut.'
-    }
-    Remove-Wizard
-    $installed = $false
-    if ((Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
-        throw 'v0.2.1 upgrade/uninstall did not preserve both profiles.'
-    }
-    Assert-NoInstallation
-    Assert-ForeignShortcut
-    foreach ($dir in @($context.Data,$context.NormalData)) {
-        Assert-NoReparsePoint $dir
-        Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
-            Assert-NoReparsePoint $_.FullName
-            if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic stable profile fixture.' }
+    # Exercise released versions with the current per-user shortcut format.
+    # Their installers are unmodified; an old helper failure is visible, not retried away.
+    foreach ($release in @(
+        @{Version='v0.2.1'; Setup=$stableFile; ExeHash=$stableExeHash; Quick=$false},
+        @{Version='v0.2.2'; Setup=$quickFile; ExeHash=$quickExeHash; Quick=$true}
+    )) {
+        & $testExe --isolated-desktop --empty-fixture-clipboard
+        if ($LASTEXITCODE -ne 0) { throw 'Could not empty clipboard before stable fixture.' }
+        Invoke-Wizard $release.Setup "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=elevated /LOG=""$log"""
+        $installed = $true
+        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $release.ExeHash -or
+            -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
+            (Test-Path -LiteralPath $context.LegacyShortcut)) {
+            throw "Expected exact released $($release.Version) and its user shortcut."
         }
-        Remove-Item -LiteralPath $dir -Recurse -Force
+        Stop-ClipPlus $context
+        $seedArgs = @('--isolated-desktop','--seed-v020-profile')
+        if ($release.Quick) { $seedArgs += '--with-quick-geometry' }
+        & $testExe @seedArgs --database $database --profile administrator
+        if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable protected profile.' }
+        & $testExe @seedArgs --database $normalDb --profile normal
+        if ($LASTEXITCODE -ne 0) { throw 'Could not seed stable normal profile.' }
+        $adminBefore = Snapshot-Profile $database
+        $normalBefore = Snapshot-Profile $normalDb
+        $oldLinkHash = (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash
+        $oldTaskXml = Export-ScheduledTask -TaskName $context.Task -TaskPath '\'
+        $oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash
+        $oldUninstallerHash = (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash
+        Start-ClipPlusAndVerify $context
+        Assert-UnchangedProfiles $adminBefore $normalBefore "Released $($release.Version) startup"
+        Invoke-FailedWizard 'after-activation' ''
+        Assert-UnchangedProfiles $adminBefore $normalBefore "Released $($release.Version) rollback"
+        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne $release.ExeHash -or
+            (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $oldLinkHash -or
+            (Export-ScheduledTask -TaskName $context.Task -TaskPath '\') -ne $oldTaskXml -or
+            (Get-FileHash -LiteralPath (Join-Path $context.Install 'clipplus-install.json') -Algorithm SHA256).Hash -ne $oldMarkerHash -or
+            (Get-FileHash -LiteralPath (Read-Registration) -Algorithm SHA256).Hash -ne $oldUninstallerHash -or
+            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw "$($release.Version) rollback did not preserve exact prior resources and both profiles."
+        }
+        Install-Wizard
+        if ((Get-FileHash -LiteralPath $context.Exe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $portableFile -Algorithm SHA256).Hash -or
+            -not (Test-Path -LiteralPath $context.Shortcut -PathType Leaf) -or
+            (Get-OwnedTask $context).Principal.RunLevel -ne 'Highest' -or
+            -not (Get-StartupEnabled (Get-OwnedTask $context)) -or
+            (Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw "$($release.Version) update changed existing profiles, startup or shortcut."
+        }
+        Remove-Wizard
+        $installed = $false
+        if ((Snapshot-Profile $database) -ne $adminBefore -or (Snapshot-Profile $normalDb) -ne $normalBefore) {
+            throw "$($release.Version) upgrade/uninstall did not preserve both profiles."
+        }
+        Assert-NoInstallation
+        Assert-ForeignShortcut
+        foreach ($dir in @($context.Data,$context.NormalData)) {
+            Assert-NoReparsePoint $dir
+            Get-ChildItem -LiteralPath $dir -Force | ForEach-Object {
+                Assert-NoReparsePoint $_.FullName
+                if ($_.PSIsContainer) { throw 'Unexpected directory in synthetic stable profile fixture.' }
+            }
+            Remove-Item -LiteralPath $dir -Recurse -Force
+        }
+        Write-Host "PASS: exact published $($release.Version) rollback, update and uninstall preserve both complete profiles and owned resources."
     }
-    Write-Host 'PASS: exact published v0.2.1 rollback, update and uninstall preserve both complete profiles and owned resources.'
-
 
 } catch {
     foreach ($file in @($log, $uninstallLog, $faultLog, (Join-Path $context.Data 'diagnostics.log'), (Join-Path $context.NormalData 'diagnostics.log'))) {
