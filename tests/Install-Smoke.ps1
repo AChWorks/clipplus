@@ -3,7 +3,7 @@
 param([Parameter(Mandatory)][string]$Setup,[Parameter(Mandatory)][string]$Portable,
       [Parameter(Mandatory)][string]$FaultSetup,
       [Parameter(Mandatory)][string]$FixtureDirectory,
-      [ValidateSet('all','candidate','releases')][string]$Suite = 'all')
+      [ValidateSet('all','candidate','fresh-faults','releases')][string]$Suite = 'all')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -565,25 +565,6 @@ try {
     $unrelatedStageHash = (Get-FileHash -LiteralPath $unrelatedStage -Algorithm SHA256).Hash
 
     if ($Suite -in @('all','candidate')) {
-        # An unrelated link occupying the exact public shortcut name must not
-        # be overwritten by setup or removed by its preparation rollback.
-        [IO.File]::Copy($unrelatedUserLink, $context.Shortcut, $false)
-        try {
-            $collision = Start-Process -FilePath $setupFile -Wait -PassThru -ArgumentList (
-                "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$log""")
-            if ($collision.ExitCode -eq 0 -or
-                (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $unrelatedUserHash -or
-                (Get-Content -LiteralPath $log -Raw) -notmatch 'unrelated per-user ClipPlus shortcut or staging path') {
-                throw 'Setup did not preserve an unrelated ClipPlus.lnk collision.'
-            }
-        } finally {
-            # This exact collision was created by the test after the initial guard.
-            if (Test-Path -LiteralPath $context.Shortcut) { Remove-Item -LiteralPath $context.Shortcut }
-        }
-        Assert-NoInstallation
-        Assert-ForeignShortcut
-        Write-Host 'PASS: setup preserved an unrelated per-user ClipPlus.lnk and refused installation.'
-
         # Run the new installed application interactions before the long
         # migration matrix, so an interaction failure is localized promptly.
         & $testExe --isolated-desktop --empty-fixture-clipboard
@@ -725,8 +706,32 @@ try {
         $installed = $false
         Clear-SyntheticProfiles
         Assert-ForeignShortcut
-        # Exercise initial transaction failures after the foreground interaction
-        # test, with a freshly empty disposable profile. All fault cases still run.
+    }
+
+    if ($Suite -in @('all','fresh-faults')) {
+        # These initial-install fault cases need no previous installation or
+        # history. They run on their own clean desktop in CI; serial -Suite all
+        # reaches the same clean boundary after the candidate suite.
+        Assert-NoInstallation
+        # An unrelated link occupying the exact public shortcut name must not
+        # be overwritten by setup or removed by its preparation rollback.
+        [IO.File]::Copy($unrelatedUserLink, $context.Shortcut, $false)
+        try {
+            $collision = Start-Process -FilePath $setupFile -Wait -PassThru -ArgumentList (
+                "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=""$log""")
+            if ($collision.ExitCode -eq 0 -or
+                (Get-FileHash -LiteralPath $context.Shortcut -Algorithm SHA256).Hash -ne $unrelatedUserHash -or
+                (Get-Content -LiteralPath $log -Raw) -notmatch 'unrelated per-user ClipPlus shortcut or staging path') {
+                throw 'Setup did not preserve an unrelated ClipPlus.lnk collision.'
+            }
+        } finally {
+            # This exact collision was created by the test after the initial guard.
+            if (Test-Path -LiteralPath $context.Shortcut) { Remove-Item -LiteralPath $context.Shortcut }
+        }
+        Assert-NoInstallation
+        Assert-ForeignShortcut
+        Write-Host 'PASS: setup preserved an unrelated per-user ClipPlus.lnk and refused installation.'
+
         & $testExe --isolated-desktop --empty-fixture-clipboard
         if ($LASTEXITCODE -ne 0) { throw 'Could not empty isolated clipboard before initial fault fixtures.' }
         foreach ($shortcutFault in @('shortcut-after-stage','shortcut-partial-stage','shortcut-replaced-stage')) {
