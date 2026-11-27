@@ -302,10 +302,19 @@ internal static partial class InstalledFlow
                 Native.GetForegroundWindow() == otherHwnd && QuickFind(popup, "Paste: " + title) is not null,
                 "icon click opens pinned panel without activating it");
             VerifyFloatingBounds(popup, iconAnchor, Preferences.Load(settings).QuickPanel);
+            // Leave the actual installed/portable panel untouched. Idle
+            // alone must not collapse it, and the first outside gesture
+            // still has to work without Resize, activation or another click.
+            Pump(TimeSpan.FromSeconds(8));
+            if (!IsWindowVisible(popup) || VisibleIcon(popup) != 0 ||
+                Native.GetForegroundWindow() != otherHwnd)
+                throw new InvalidOperationException("Idle changed expanded quick session or foreground.");
+            Console.WriteLine("PASS: expanded quick panel remains open through 8s idle");
             // Click the already-foreground application. No Deactivated
             // event can distinguish this case; the gesture must still work.
             FocusOther();
             icon = RequireCollapsed(popup, otherHwnd);
+            Console.WriteLine("PASS: first outside click collapses actual quick panel after idle");
             var returned = Bounds(icon);
             if (returned.Left != dragged.Left || returned.Top != dragged.Top)
                 throw new InvalidOperationException("Automatic clamping moved the stored icon anchor.");
@@ -448,18 +457,31 @@ internal static partial class InstalledFlow
     internal static int RunQuickTarget(string[] args)
     {
         var application = new Application();
-        var editor = new TextBox { AcceptsReturn = true, FontSize = 18, Margin = new Thickness(8) };
-        AutomationProperties.SetName(editor, "Second synthetic editor");
+        FrameworkElement content;
+        if (args.Contains("--click-counter"))
+        {
+            var button = new Button { Content = "0" };
+            AutomationProperties.SetAutomationId(button, "OutsideGestureCounter");
+            var count = 0;
+            button.Click += (_, _) => button.Content = (++count).ToString(CultureInfo.InvariantCulture);
+            content = button;
+        }
+        else
+        {
+            var editor = new TextBox { AcceptsReturn = true, FontSize = 18, Margin = new Thickness(8) };
+            AutomationProperties.SetName(editor, "Second synthetic editor");
+            content = editor;
+        }
         var window = new Window
         {
             Title = "ClipPlus independent synthetic paste target",
-            Content = editor,
+            Content = content,
             Width = int.Parse(Argument(args, "--width"), CultureInfo.InvariantCulture), Height = 180,
             WindowStartupLocation = WindowStartupLocation.Manual,
             Left = int.Parse(Argument(args, "--left"), CultureInfo.InvariantCulture),
             Top = int.Parse(Argument(args, "--top"), CultureInfo.InvariantCulture)
         };
-        window.Loaded += (_, _) => editor.Focus();
+        window.Loaded += (_, _) => content.Focus();
         return application.Run(window);
     }
 

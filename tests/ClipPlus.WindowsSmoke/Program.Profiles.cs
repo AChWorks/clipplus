@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows.Interop;
 using System.Security.Cryptography;
 using System.Text;
 using ClipPlus;
@@ -8,13 +9,32 @@ using Microsoft.Data.Sqlite;
 
 internal static partial class Program
 {
+    private static int EmptyFixtureClipboard()
+    {
+        using var source = new HwndSource(new HwndSourceParameters("ClipPlus isolated profile fixture") { WindowStyle = 0 });
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            if (Native.OpenClipboard(source.Handle))
+            {
+                try
+                {
+                    if (!Native.EmptyClipboard()) throw Native.Error("Empty isolated fixture clipboard");
+                    return 0;
+                }
+                finally { Native.CloseClipboard(); }
+            }
+            Thread.Sleep(50);
+        }
+        throw Native.Error("Open isolated fixture clipboard");
+    }
+
     // No real clipboard or user data. The lifecycle runner guards that both
     // profile locations are absent before creating its synthetic fixtures.
     private static int ProfileFixture(string[] args)
     {
         var path = args[Array.IndexOf(args, "--database") + 1];
         var settings = Path.Combine(Path.GetDirectoryName(path)!, "settings.json");
-        if (args.Contains("--seed-v020-profile"))
+        if (args.Contains("--seed-profile"))
         {
             var name = args[Array.IndexOf(args, "--profile") + 1];
             if (name == "administrator")
@@ -46,40 +66,22 @@ internal static partial class Program
                 store.SetCategory(id, i % 2 == 0 ? category : second);
                 if (i < 5) store.SetPinned(id, true);
             }
-            // Match the exact serialized property order and value types of the
-            // released Preferences record. v0.2.0 rewrites settings at startup;
-            // the fixture must survive that rewrite byte for byte.
-            var legacySettings = new { WindowHeight = name == "normal" ? 410d : 470d,
-                WindowPosition = new WindowPosition(25, 40), Shortcut = "CtrlShiftV",
-                CompactView = name == "normal", ActiveView = (long?)category };
-            var quickGeometry = new PopupGeometry(name == "normal" ? 205 : 240, name == "normal" ? 385 : 355,
-                new WindowPosition(55, 75));
-            var quickSettings = new
+            // The current rolling upgrade window shares this Preferences
+            // schema. Keep representative distinct data in both profiles;
+            // update the fixture deliberately if a future schema changes.
+            var settingsValue = new Preferences
             {
-                legacySettings.WindowHeight, legacySettings.WindowPosition, legacySettings.Shortcut,
-                QuickPanel = quickGeometry, legacySettings.CompactView, legacySettings.ActiveView
+                WindowHeight = name == "normal" ? 410d : 470d,
+                WindowPosition = new WindowPosition(25, 40),
+                Shortcut = Shortcut.CtrlShiftV,
+                QuickPanel = new PopupGeometry(name == "normal" ? 205 : 240,
+                    name == "normal" ? 385 : 355, new WindowPosition(55, 75)),
+                AutoCollapseQuickPanel = name == "normal",
+                FloatingPosition = new WindowPosition(name == "normal" ? 190 : 260, 110),
+                CompactView = name == "normal",
+                ActiveView = category,
+                WindowWidth = name == "normal" ? 310d : 420d
             };
-            object settingsValue = args.Contains("--with-floating-geometry")
-                ? new Preferences
-                {
-                    WindowHeight = legacySettings.WindowHeight,
-                    WindowPosition = legacySettings.WindowPosition,
-                    Shortcut = Shortcut.CtrlShiftV,
-                    QuickPanel = quickGeometry,
-                    AutoCollapseQuickPanel = name == "normal",
-                    FloatingPosition = new WindowPosition(name == "normal" ? 190 : 260, 110),
-                    CompactView = legacySettings.CompactView,
-                    ActiveView = legacySettings.ActiveView,
-                    WindowWidth = name == "normal" ? 310d : 420d
-                }
-                : args.Contains("--with-width-geometry")
-                ? new
-                {
-                    quickSettings.WindowHeight, quickSettings.WindowPosition, quickSettings.Shortcut,
-                    quickSettings.QuickPanel, quickSettings.CompactView, quickSettings.ActiveView,
-                    WindowWidth = name == "normal" ? 310d : 420d
-                }
-                : args.Contains("--with-quick-geometry") ? quickSettings : legacySettings;
             File.WriteAllText(settings, System.Text.Json.JsonSerializer.Serialize(settingsValue,
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             return 0;

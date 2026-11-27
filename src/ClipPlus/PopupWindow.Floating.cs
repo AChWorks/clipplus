@@ -28,15 +28,6 @@ public partial class PopupWindow
         }
     }
 
-    private void RenewOutsideClickMonitor()
-    {
-        if (!IsQuickMode || !IsVisible || !_preferences().AutoCollapseQuickPanel) return;
-        if (_outsideClick is { IsRunning: true } observer)
-            observer.RenewAfterMoveSize();
-        else
-            UpdateOutsideClickMonitor();
-    }
-
     private void StopOutsideClickMonitor()
     {
         if (_outsideClick is null) return;

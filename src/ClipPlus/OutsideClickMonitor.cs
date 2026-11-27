@@ -1,33 +1,36 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 
 namespace ClipPlus;
 
-// The panel is normally non-activating, so Deactivated cannot detect a
-// click in the already-active application. The low-level hook supplies
-// button-event screen coordinates (also for injected mouse input), which a
-// deferred cursor-position sample from raw input cannot reliably recover.
-// Observe gestures only during an expanded floating session, on a dedicated
-// native message pump, and immediately pass motion and all other input on.
-// Never suppress input, inspect clipboard content or record pointer history.
+// A passive, non-activating panel cannot rely on Deactivated: its target
+// may already be foreground. Register only the mouse usage with Raw Input
+// on a message-only window, for the lifetime of an expanded floating panel.
+// Unlike WH_MOUSE_LL, this asynchronous notification path does not run
+// inside the global hook chain or depend on surviving LowLevelHooksTimeout.
+// MSG.pt supplies the screen coordinates when the message was posted;
+// sampling GetCursorPos later would misclassify queued/rapid gestures.
+// No polling, input suppression, pointer history or clipboard collection.
 internal sealed class OutsideClickMonitor : IDisposable
 {
     private readonly nint _window;
     private readonly int _generation;
     private readonly Thread _thread;
-    private readonly Native.HookProc _callback;
-    private readonly ManualResetEvent _stop = new(false);
-    private readonly AutoResetEvent _renew = new(false);
+    private readonly BoundsTimeline _bounds;
+    private nint _sink;
+    private const int WmBoundsChanged = 0x8005;
+    private bool _boundsWakePending;
+    private volatile bool _boundsPending;
+    private readonly ManualResetEvent _stop;
     private readonly Func<EventWaitHandle, bool>? _signalStop;
-    // The observer thread owns the native handle, including renewal.
-    private nint _hook;
     private Exception? _startError;
-    private int _outsideButtons;
+    private uint _outsideButtons;
     private bool _disposed;
 
-    // Read after joining the native thread; unexpected termination is
-    // reported separately from normal stop and can never strand a callback.
+    // Read after joining the native thread.
     internal Exception? Failure { get; private set; }
     internal bool IsRunning => _thread.IsAlive;
 
@@ -36,128 +39,226 @@ internal sealed class OutsideClickMonitor : IDisposable
         _window = window;
         _generation = generation;
         _signalStop = signalStop;
-        _callback = Observe;
+        if (!Native.GetWindowRect(window, out var initialBounds))
+            throw Native.Error("Read initial expanded panel bounds");
+        _bounds = new BoundsTimeline(initialBounds);
+        _stop = new ManualResetEvent(false);
         using var ready = new ManualResetEvent(false);
         _thread = new Thread(() =>
         {
+            nint sink = 0;
+            var registered = false;
             try
             {
-                Native.PeekMessage(out _, 0, 0, 0, 0);
-                InstallHook();
+                // The predefined STATIC class supplies a native HWND with
+                // no custom callback or visible/activatable surface.
+                sink = Native.CreateWindowExW(0, "STATIC", "ClipPlus outside click", 0,
+                    0, 0, 0, 0, (nint)(-3), 0, 0, 0); // HWND_MESSAGE
+                if (sink == 0) throw Native.Error("CreateWindowEx (outside-click input sink)");
+                RegisterMouse(sink, Native.RidevInputSink);
+                registered = true;
+                _sink = sink;
             }
             catch (Exception ex) { _startError = ex; }
             finally { ready.Set(); }
-            if (_startError is not null) return;
-            try { Pump(); }
+
+            try
+            {
+                if (_startError is null) Pump(sink);
+            }
             catch (Exception ex) { Failure = ex; }
             finally
             {
-                try { RemoveHook(); }
-                catch (Exception ex) { Failure ??= ex; }
-                if (Failure is not null)
+                // One raw mouse registration per process. The owning
+                // thread unregisters before destroying its HWND and joins
+                // before the next observer can be created.
+                if (registered)
+                {
+                    try { RegisterMouse(0, Native.RidevRemove); }
+                    catch (Exception ex) { Failure ??= ex; }
+                }
+                if (sink != 0 && !Native.DestroyWindow(sink))
+                    Failure ??= Native.Error("DestroyWindow (outside-click input sink)");
+                if (_startError is null && Failure is not null)
                     Native.PostMessage(_window, Native.WmOutsideQuickFault, _generation, 0);
             }
         }) { IsBackground = true, Name = "ClipPlus outside click" };
         try { _thread.Start(); }
-        catch { _renew.Dispose(); _stop.Dispose(); throw; }
+        catch { _stop.Dispose(); throw; }
         ready.WaitOne();
         if (_startError is not null)
         {
             _thread.Join();
-            _renew.Dispose();
             _stop.Dispose();
-            throw new InvalidOperationException("Outside-click detection could not be enabled.", _startError);
+            // Keep the original native error/code for the existing local
+            // diagnostics path rather than wrapping it in a generic error.
+            ExceptionDispatchInfo.Capture(_startError).Throw();
         }
     }
 
-    private void InstallHook()
+    private static void RegisterMouse(nint sink, uint flags)
     {
-        _hook = Native.SetWindowsHookEx(14, _callback, Native.GetModuleHandle(null), 0); // WH_MOUSE_LL
-        if (_hook == 0) throw Native.Error("SetWindowsHookEx (floating clipboard)");
+        var devices = new[] { new Native.RawInputDevice { Page = 1, Usage = 2, Flags = flags, Target = sink } };
+        if (!Native.RegisterRawInputDevices(devices, (uint)devices.Length, (uint)Marshal.SizeOf<Native.RawInputDevice>()))
+            throw Native.Error(flags == Native.RidevRemove ? "Unregister raw mouse input" : "Register raw mouse input");
     }
 
-    private void RemoveHook()
+    // The popup's native geometry notification runs on the UI thread.
+    // Keep only geometry boundaries still needed by queued mouse input,
+    // never pointer samples. The observer never waits for the UI thread.
+    internal void BoundsChanged()
     {
-        if (_hook == 0) return;
-        if (!Native.UnhookWindowsHookEx(_hook))
+        if (!IsRunning) return;
+        var tick = (long)Native.GetTickCount64();
+        if (!Native.GetWindowRect(_window, out var bounds))
+            throw Native.Error("Read changed expanded panel bounds");
+        lock (_bounds)
         {
-            var error = Native.Error("UnhookWindowsHookEx (floating clipboard)");
-            // Windows can silently remove a timed-out low-level hook while
-            // its owner thread is still alive. It is already uninstalled.
-            if (error.NativeErrorCode != 1404) throw error; // ERROR_INVALID_HOOK_HANDLE
-            _outsideButtons = 0;
+            if (!_bounds.Record(tick, bounds)) return;
+            _boundsPending = true;
+            if (_boundsWakePending) return;
+            // Even a programmatic geometry change with no mouse traffic
+            // gets an opportunity to retire old snapshots. Coalesce wakes.
+            if (!Native.PostMessage(_sink, WmBoundsChanged, 0, 0))
+                throw Native.Error("Post outside-click geometry notification");
+            _boundsWakePending = true;
         }
-        _hook = 0;
     }
 
-    internal void RenewAfterMoveSize()
+    private void RetireDrainedBounds(nint sink)
     {
-        // A live thread is not proof of a live low-level hook. Re-arm once
-        // at a native interaction boundary, on the same owner thread.
-        // No polling, extra hook or synchronous UI-thread join is needed.
-        if (!_disposed && !_renew.Set())
-            throw new InvalidOperationException("Could not renew outside-click detection after move/size.");
+        // Posted wake messages may overtake raw input. Only discard old
+        // bounds after checking the actual raw queue, not wake ordering.
+        var tick = (long)Native.GetTickCount64();
+        if (Native.PeekMessage(out _, sink, Native.WmInput, Native.WmInput, 0)) return;
+        lock (_bounds)
+        {
+            _bounds.RetireBefore(tick);
+            _boundsPending = _bounds.HasTransitions;
+        }
     }
 
-    private void Pump()
+    // A session-local timeline of actual window rectangles, not a second
+    // geometry authority. Native notifications supply the transitions;
+    // queued input supplies the retirement watermark. Equal-tick changes
+    // have no finer native ordering: prefer inside if either rectangle
+    // contains the press, rather than turning an internal drag into a click.
+    internal sealed class BoundsTimeline
     {
-        // Stop has priority, renewal is coalesced, and native input remains
-        // event-driven. Both handles stay valid until the owner has joined.
-        var handles = new[] { _stop.SafeWaitHandle.DangerousGetHandle(), _renew.SafeWaitHandle.DangerousGetHandle() };
-        const uint sentOrPostedMessages = 0x0040 | 0x0008;
-        const uint inputAvailable = 0x0004;
+        private readonly LinkedList<(long Tick, Native.Rect Rect)> _entries = new();
+
+        internal bool HasTransitions => _entries.Count > 1;
+
+        internal BoundsTimeline(Native.Rect initial) => _entries.AddLast((long.MinValue, initial));
+
+        internal bool Record(long tick, Native.Rect rect)
+        {
+            var previous = _entries.Last!.Value.Rect;
+            if (previous.Left == rect.Left && previous.Top == rect.Top &&
+                previous.Right == rect.Right && previous.Bottom == rect.Bottom) return false;
+            _entries.AddLast((tick, rect));
+            return true;
+        }
+
+        internal void RetireBefore(long tick)
+        {
+            // Preserve the predecessor of the first boundary at/after
+            // tick. Inputs sharing the boundary tick can still arrive.
+            while (_entries.First!.Next is { } next && next.Value.Tick < tick)
+                _entries.RemoveFirst();
+        }
+
+        internal bool ContainsAt(long tick, Native.Point point)
+        {
+            RetireBefore(tick);
+            var entry = _entries.First!;
+            do
+            {
+                var r = entry.Value.Rect;
+                if (point.X >= r.Left && point.X < r.Right && point.Y >= r.Top && point.Y < r.Bottom)
+                    return true;
+                entry = entry.Next;
+            }
+            while (entry is not null && entry.Value.Tick == tick);
+            return false;
+        }
+    }
+
+    private void Pump(nint sink)
+    {
+        var handles = new[] { _stop.SafeWaitHandle.DangerousGetHandle() };
+        const uint allInput = 0x1CFF; // QS_ALLINPUT, including QS_RAWINPUT
+        const uint inputAvailable = 0x0004; // MWMO_INPUTAVAILABLE
+        var headerSize = (uint)Marshal.SizeOf<Native.RawInputHeader>();
+        var packetSize = (uint)Marshal.SizeOf<Native.RawMouseInput>();
         while (true)
         {
-            var result = Native.MsgWaitForMultipleObjectsEx((uint)handles.Length, handles, uint.MaxValue,
-                sentOrPostedMessages, inputAvailable);
+            var result = Native.MsgWaitForMultipleObjectsEx(1, handles, uint.MaxValue, allInput, inputAvailable);
             if (result == 0) return;
-            if (result == 1)
+            if (result != 1) throw Native.Error("Wait for outside-click messages");
+            // Process one queued message at a time so an owned stop signal
+            // wins even during continuous high-frequency mouse input.
+            if (!Native.PeekMessage(out var message, 0, 0, 0, 1)) continue;
+            if (message.Id == 0x0012)
+                throw new InvalidOperationException("Outside-click message loop quit unexpectedly.");
+            if (message.Hwnd == sink && message.Id == WmBoundsChanged)
             {
-                RemoveHook();
-                InstallHook();
+                lock (_bounds) _boundsWakePending = false;
+                RetireDrainedBounds(sink);
                 continue;
             }
-            if (result != 2) throw Native.Error("Wait for outside-click messages");
-            // PeekMessage dispatches sent low-level hook callbacks, even if
-            // there is no posted message to retrieve. This thread owns no HWND.
-            if (Native.PeekMessage(out var message, 0, 0, 0, 1) && message.Id == 0x0012)
-                throw new InvalidOperationException("Outside-click message loop quit unexpectedly.");
+            if (message.Hwnd != sink || message.Id != Native.WmInput)
+            {
+                Native.DispatchMessageW(ref message);
+                continue;
+            }
+
+            try
+            {
+                var size = packetSize;
+                var read = Native.GetRawInputData(message.LParam, Native.RidInput, out var input, ref size, headerSize);
+                if (read == uint.MaxValue) throw Native.Error("Read raw mouse input");
+                // The registration is mouse-only; do not interpret another
+                // packet type or a truncated native structure as a gesture.
+                if (read == packetSize && input.Header.Type == 0)
+                    ObserveButtons(input.Mouse.ButtonFlags, message.Point, message.Time);
+            }
+            finally
+            {
+                // Required for foreground WM_INPUT, also safe for INPUTSINK.
+                Native.DefWindowProcW(sink, message.Id, message.WParam, message.LParam);
+            }
         }
     }
 
-    private nint Observe(int code, nint message, nint data)
+    private void ObserveButtons(uint flags, Native.Point point, uint messageTime)
     {
-        if (code >= 0)
+        // RAWMOUSE RI_MOUSE_BUTTON_1..5 use alternating down/up bits.
+        // Track each button independently; ignore wheel and motion data.
+        const uint downBits = 0x0155;
+        var down = flags & downBits;
+        var up = (flags >> 1) & downBits;
+        // Advance the geometry watermark on motion too, but only while
+        // a transition is pending. The usual idle/motion path needs no
+        // geometry query, allocation, or lock.
+        if (down != 0 || _boundsPending)
         {
-            // MSLLHOOKSTRUCT starts with a screen-coordinate POINT.
-            var button = (int)message switch
+            var tick = Native.MessageTick(messageTime, Native.GetTickCount64());
+            lock (_bounds)
             {
-                0x0201 or 0x0202 => 1, // left
-                0x0204 or 0x0205 => 2, // right
-                0x0207 or 0x0208 => 4, // middle
-                0x020B or 0x020C => 8, // X button
-                _ => 0
-            };
-            if (button != 0)
-            {
-                if (message is 0x0201 or 0x0204 or 0x0207 or 0x020B)
+                if (down != 0)
                 {
-                    _outsideButtons &= ~button;
-                    var point = Marshal.PtrToStructure<Native.Point>(data);
-                    if (Native.GetWindowRect(_window, out var rect) &&
-                        (point.X < rect.Left || point.X >= rect.Right || point.Y < rect.Top || point.Y >= rect.Bottom))
-                        _outsideButtons |= button;
+                    _outsideButtons &= ~down;
+                    if (!_bounds.ContainsAt(tick, point)) _outsideButtons |= down;
                 }
-                else if ((_outsideButtons & button) != 0)
-                {
-                    _outsideButtons &= ~button;
-                    // Complete the external gesture first, so an icon
-                    // appearing under the pointer cannot eat its press.
-                    Native.PostMessage(_window, Native.WmOutsideQuickClick, _generation, 0);
-                }
+                else _bounds.RetireBefore(tick);
+                _boundsPending = _bounds.HasTransitions;
             }
         }
-        return Native.CallNextHookEx(0, code, message, data);
+        var outsideRelease = (_outsideButtons & up) != 0;
+        _outsideButtons &= ~up;
+        if (outsideRelease && !Native.PostMessage(_window, Native.WmOutsideQuickClick, _generation, 0))
+            throw Native.Error("Post outside-click completion");
     }
 
     public void Dispose()
@@ -166,7 +267,6 @@ internal sealed class OutsideClickMonitor : IDisposable
         if (_thread.IsAlive && !(_signalStop?.Invoke(_stop) ?? _stop.Set()) && _thread.IsAlive)
             throw new InvalidOperationException("Could not signal outside-click detection to stop.");
         _thread.Join();
-        _renew.Dispose();
         _stop.Dispose();
         _disposed = true;
     }

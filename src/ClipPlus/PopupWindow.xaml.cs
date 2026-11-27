@@ -241,6 +241,11 @@ public partial class PopupWindow : Window
             // capture only when Windows supplies no external HWND.
             _searchTarget = Native.ExternalTarget(lParam) ?? _searchTarget;
         }
+        // WM_WINDOWPOSCHANGED observes the actual native rectangle,
+        // including native drag/resize, DPI placement and programmatic
+        // moves. It does not consume the message or change persistence.
+        if (message == 0x0047 && _outsideClick is { } observer)
+            Run(observer.BoundsChanged);
         if (message == 0x0231) // WM_ENTERSIZEMOVE
         {
             _inMoveSize = !_placing && Native.GetWindowRect(hwnd, out _moveStart);
@@ -251,7 +256,7 @@ public partial class PopupWindow : Window
         else if (_inMoveSize && message == 0x0214) // WM_SIZING
             _userSizing = true;
         else if (message == 0x0232) // WM_EXITSIZEMOVE
-            Run(() => FinishMoveSize(hwnd));
+            Run(() => CompleteMoveSize(hwnd));
         else if (_inMoveSize && (message is 0x0215 or 0x001F)) // WM_CAPTURECHANGED / WM_CANCELMODE
         {
             // Cancellation/capture loss may precede the usual exit message.
@@ -261,7 +266,7 @@ public partial class PopupWindow : Window
             {
                 if (_inMoveSize) Run(() =>
                 {
-                    if (!Native.IsMoveSizeActive(hwnd)) FinishMoveSize(hwnd);
+                    if (!Native.IsMoveSizeActive(hwnd)) CompleteMoveSize(hwnd);
                 });
             }));
         }
@@ -271,12 +276,6 @@ public partial class PopupWindow : Window
     private void ResetMoveSizeTracking()
     {
         _inMoveSize = _userMoving = _userSizing = false;
-    }
-
-    private void FinishMoveSize(nint hwnd)
-    {
-        try { CompleteMoveSize(hwnd); }
-        finally { RenewOutsideClickMonitor(); }
     }
 
     private void CompleteMoveSize(nint hwnd)

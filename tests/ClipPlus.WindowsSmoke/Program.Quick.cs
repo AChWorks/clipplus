@@ -142,14 +142,18 @@ internal static partial class Program
             target.UpdateLayout();
             var center = targetButton.PointToScreen(new Point(targetButton.ActualWidth / 2, targetButton.ActualHeight / 2));
             Check(center.X < panel.Left || center.X >= panel.Right || center.Y < panel.Top || center.Y >= panel.Bottom, "outside test coordinate");
-            void ClickTarget()
+            void ClickTarget(bool movePointer = true)
             {
-                Check(Native.SetCursorPos((int)center.X, (int)center.Y), "move to outside target button");
-                InstalledFlow.Pump(TimeSpan.FromMilliseconds(60));
+                if (movePointer)
+                {
+                    Check(Native.SetCursorPos((int)center.X, (int)center.Y), "move to outside target button");
+                    InstalledFlow.Pump(TimeSpan.FromMilliseconds(60));
+                }
                 InstalledFlow.SendMouse(0x0002);
                 try { InstalledFlow.Pump(TimeSpan.FromMilliseconds(80)); }
                 finally { InstalledFlow.SendMouse(0x0004); }
             }
+            Check(RegisteredMouseSink() == 0, "always-expanded quick panel owns no raw mouse registration");
             ClickTarget();
             PumpUntil(() => clicks == 1);
             Check(clicks == 1 && popup.IsVisible && popup.IsQuickMode, "always-expanded mode delivers the outside click and keeps panel open");
@@ -161,6 +165,7 @@ internal static partial class Program
                 "outside click collapses the panel and still reaches the target button exactly once");
             var icon = Application.Current.Windows.OfType<FloatingIconWindow>().Single(w => w.IsVisible);
             Check(popup.IsQuickMode && !popup.IsVisible && icon.IsVisible, "floating mode retains quick session");
+            Check(RegisteredMouseSink() == 0, "collapsed floating icon owns no raw mouse registration");
             VerifyGlassIcon(icon, (int)center.X, (int)center.Y);
             try
             {
@@ -227,6 +232,10 @@ internal static partial class Program
                 "explicit pin invalidation refreshes a collapsed view on reopen");
             var close = (Button)popup.FindName("CloseButton");
             var toggle = (Button)popup.FindName("QuickModeButton");
+            var retainedSink = RegisteredMouseSink();
+            Check(retainedSink != 0, "raw mouse sink exists before injected failed stop");
+            void Retained(string operation) => Check(RegisteredMouseSink() == retainedSink &&
+                Native.IsWindow(retainedSink), operation + ": failed stop retains original registration and HWND");
             failStop(true);
             try
             {
@@ -235,61 +244,97 @@ internal static partial class Program
                 Check(clicks == 6 && stopErrors() == 1 && popup.IsQuickMode && popup.IsVisible && !icon.IsVisible &&
                     search.Text == query && Native.GetForegroundWindow() == targetHwnd,
                     "failed native stop during outside collapse reports the error and keeps only the usable expanded panel");
+                Retained("outside collapse");
                 close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, close));
                 Check(stopErrors() == 2 && popup.IsVisible && popup.IsQuickMode && !icon.IsVisible,
                     "failed stop on header Close preserves quick session without dispatcher exception");
+                Retained("header Close");
                 toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, toggle));
                 Check(stopErrors() == 3 && popup.IsVisible && popup.IsQuickMode && !icon.IsVisible,
                     "failed stop on unpin preserves quick session without dispatcher exception");
+                Retained("unpin");
                 popup.Close();
                 Check(stopErrors() == 4 && popup.IsVisible && popup.IsQuickMode && !icon.IsVisible,
                     "failed stop cancels native Close before destroying the usable window");
+                Retained("native Close");
             }
             finally { failStop(false); }
             ClickTarget();
             PumpUntil(() => clicks == 7 && icon.IsVisible);
             Check(clicks == 7 && stopErrors() == 4 && !popup.IsVisible && icon.IsVisible,
                 "retry stops the retained native observer and successfully collapses");
+            Check(RegisteredMouseSink() == 0 && !Native.IsWindow(retainedSink),
+                "successful stop retry unregisters and destroys the original HWND");
             popup.OpenFloatingPanel();
             Check(popup.IsVisible && !icon.IsVisible, "session reopens after stop recovery");
 
-            // Model silent removal by Windows without actually blocking
-            // the global input chain or changing the system timeout. The
-            // test removes the real native hook but leaves its thread alive.
-            // Use reflection only in this isolated regression harness.
-            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-            foreach (var completion in new[] { (Message: 0x0232, Name: "native exit"),
-                (Message: 0x001F, Name: "cancel mode"), (Message: 0x0215, Name: "capture loss") })
+            VerifyBoundsTimeline();
+            // Use a distinct foreground process for the native modal loop,
+            // as in the installed tests. Two WPF windows sharing the popup's
+            // input thread are not an independent activation target.
+            VerifyDelayedGeometryGestures(popup, icon, query, get);
+            target.Activate();
+            Native.SetForegroundWindow(targetHwnd);
+            PumpUntil(() => Native.GetForegroundWindow() == targetHwnd);
+            Check(Native.GetForegroundWindow() == targetHwnd && popup.IsVisible && !icon.IsVisible,
+                "restore original external fixture for idle regression");
+
+            // The native Raw Input registration remains active without
+            // movement, resize, focus changes or periodic hook renewal.
+            // Check the real process-local registration, not just a live
+            // worker flag. Exercise the first outside gesture after idle.
+            foreach (var idle in new[] { 6, 15 })
             {
-                var observer = (OutsideClickMonitor)typeof(PopupWindow).GetField("_outsideClick", flags)!.GetValue(popup)!;
-                var hook = (nint)typeof(OutsideClickMonitor).GetField("_hook", flags)!.GetValue(observer)!;
-                Check(hook != 0 && Native.UnhookWindowsHookEx(hook) && observer.IsRunning,
-                    completion.Name + ": simulate loss of actual hook while owner thread remains alive");
+                var sink = RegisteredMouseSink();
+                Check(sink != 0 && sink != popup.Handle && Native.IsWindow(sink),
+                    "expanded quick panel owns a live message-only raw mouse sink");
+                // Motion, wheel and an unmatched release are not a click.
+                Check(Native.SetCursorPos((int)center.X + 1, (int)center.Y), "move pointer before idle");
+                InstalledFlow.SendMouse(0x0800, 120);
+                InstalledFlow.SendMouse(0x0004);
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(180));
+                Check(popup.IsVisible && !icon.IsVisible && RegisteredMouseSink() == sink,
+                    "motion, wheel and unmatched release do not dismiss expanded panel");
+                Check(Native.SetCursorPos((int)center.X, (int)center.Y), "position pointer outside before idle");
+                InstalledFlow.Pump(TimeSpan.FromSeconds(idle));
+                Check(popup.IsVisible && !icon.IsVisible && RegisteredMouseSink() == sink &&
+                    Native.GetForegroundWindow() == targetHwnd,
+                    $"{idle}s idle neither dismisses panel nor replaces its native registration");
                 var count = clicks;
-                ClickTarget();
-                PumpUntil(() => clicks == count + 1);
-                Check(clicks == count + 1 && popup.IsVisible && !icon.IsVisible,
-                    completion.Name + ": removed hook no longer detects real outside clicks");
-                Check(Native.PostMessage(popup.Handle, 0x0231, 0, 0) &&
-                    Native.PostMessage(popup.Handle, completion.Message, 0, 0),
-                    completion.Name + ": deliver move/size completion boundary");
-                InstalledFlow.Pump(TimeSpan.FromMilliseconds(150));
-                Check(observer.IsRunning &&
-                    ReferenceEquals(observer, typeof(PopupWindow).GetField("_outsideClick", flags)!.GetValue(popup)),
-                    completion.Name + ": re-arm on existing owner thread without creating another observer");
-                ClickTarget();
-                PumpUntil(() => clicks == count + 2 && icon.IsVisible);
-                Check(clicks == count + 2 && icon.IsVisible && !popup.IsVisible && stopErrors() == 4,
-                    completion.Name + ": first subsequent outside gesture reaches target and collapses panel");
+                // No pointer movement or other event before the first press.
+                ClickTarget(movePointer: false);
+                PumpUntil(() => clicks == count + 1 && icon.IsVisible);
+                Check(clicks == count + 1 && icon.IsVisible && !popup.IsVisible &&
+                    RegisteredMouseSink() == 0 && !Native.IsWindow(sink) && stopErrors() == 4,
+                    $"{idle}s idle: first outside click delivered once, panel collapses and unregisters sink");
                 popup.OpenFloatingPanel();
                 Check(popup.IsVisible && !icon.IsVisible && search.Text == query &&
                     Native.GetForegroundWindow() == targetHwnd,
-                    completion.Name + ": reopened quick session preserves query and focus");
+                    "reopen after idle preserves search and external focus");
+            }
+            // RAWMOUSE encodes the two X buttons separately; other supported
+            // mouse buttons use the same down/up pairing and lifecycle.
+            foreach (var gesture in new[] { (Down: 0x0008u, Up: 0x0010u, Data: 0u, Name: "right"),
+                (Down: 0x0020u, Up: 0x0040u, Data: 0u, Name: "middle"),
+                (Down: 0x0080u, Up: 0x0100u, Data: 1u, Name: "X1"),
+                (Down: 0x0080u, Up: 0x0100u, Data: 2u, Name: "X2") })
+            {
+                Check(Native.SetCursorPos((int)center.X, (int)center.Y), "outside button position");
+                InstalledFlow.SendMouse(gesture.Down, gesture.Data);
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(120));
+                Check(popup.IsVisible && !icon.IsVisible, gesture.Name + " down alone does not dismiss");
+                InstalledFlow.SendMouse(gesture.Up, gesture.Data);
+                PumpUntil(() => icon.IsVisible);
+                Check(icon.IsVisible && !popup.IsVisible && RegisteredMouseSink() == 0,
+                    gesture.Name + " outside down/up collapses and unregisters");
+                popup.OpenFloatingPanel();
+                Check(popup.IsVisible && !icon.IsVisible, gesture.Name + " collapse reopens");
             }
             close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, close));
             Check(!icon.IsVisible && !popup.IsVisible && !popup.IsQuickMode &&
                 !Application.Current.Windows.OfType<FloatingIconWindow>().Any(),
                 "closing the quick session releases its floating window after stop recovery");
+            Check(RegisteredMouseSink() == 0, "closing quick session removes raw mouse registration");
             Check(icon.ReadLocalValue(FloatingIconWindow.SystemHighContrastProperty) == DependencyProperty.UnsetValue &&
                 floatingButton.ReadLocalValue(Control.BackgroundProperty) == DependencyProperty.UnsetValue &&
                 floatingButton.ReadLocalValue(Control.ForegroundProperty) == DependencyProperty.UnsetValue &&

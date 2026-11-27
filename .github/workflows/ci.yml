@@ -10,7 +10,8 @@ concurrency:
   group: clipplus-ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  windows:
+  build:
+    name: Build candidate once
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -18,57 +19,8 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
-      - name: Test core on Windows
-        run: dotnet test tests/ClipPlus.Tests/ClipPlus.Tests.csproj -c Release --verbosity minimal
-      - name: Build and run Framework native clipboard and WPF smoke
-        shell: pwsh
-        run: |
-          dotnet build tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop
-          exit $LASTEXITCODE
-      - name: Measure released-source baseline and candidate WPF performance
-        shell: pwsh
-        run: |
-          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | Format-List
-          New-Item -ItemType Directory -Path TestResults -Force | Out-Null
-          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v025'
-          git fetch --no-tags origin refs/tags/v0.2.5:refs/tags/v0.2.5
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git worktree add --detach $baseline e78d0bd96bdb48c1a2c48c24fd1a4920e435583c
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          try {
-            $source = Join-Path $baseline 'tests/ClipPlus.WindowsSmoke'
-            Copy-Item tests/ClipPlus.WindowsSmoke/Program.Benchmark.cs $source
-            dotnet build (Join-Path $source 'ClipPlus.WindowsSmoke.csproj') -c Release
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v025.txt
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v026.txt
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            foreach ($file in @('TestResults/performance-v025.txt','TestResults/performance-v026.txt')) {
-              if (-not (Select-String -Path $file -Pattern 'BENCH first-open-recent') -or
-                  -not (Select-String -Path $file -Pattern 'BENCH idle-quick-expanded') -or
-                  -not (Select-String -Path $file -Pattern 'BENCH motion-quick-expanded')) {
-                throw "Interactive WPF benchmark incomplete: $file"
-              }
-            }
-            if (-not (Select-String -Path TestResults/performance-v026.txt -Pattern 'BENCH floating-expand-final') -or
-                -not (Select-String -Path TestResults/performance-v026.txt -Pattern 'BENCH idle-floating-after-cycles')) {
-              throw 'Floating transition and resource measurements did not run.'
-            }
-          } finally { git worktree remove --force $baseline }
-      - name: Upload synthetic popup visual evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ClipPlus-UI-Evidence
-          path: |
-            TestResults/categories-*.png
-            TestResults/quick-*.png
-            TestResults/performance-*.txt
-          if-no-files-found: ignore
-          retention-days: 14
+      - name: Build Framework smoke harness
+        run: dotnet build tests/ClipPlus.WindowsSmoke/ClipPlus.WindowsSmoke.csproj -c Release
       - name: Validate setup script syntax
         shell: pwsh
         run: |
@@ -84,37 +36,140 @@ jobs:
       - name: Build portable executable and graphical installer
         shell: pwsh
         run: ./scripts/Build-Package.ps1 -BuildFaultHarness
-      - name: Retrieve exact released v0.1.0 through v0.2.5 installer fixtures
+      - name: Upload shared unverified build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ClipPlus-Candidate
+          path: |
+            artifacts/ClipPlus.exe
+            artifacts/ClipPlus.exe.sha256
+            artifacts/ClipPlus-Setup.exe
+            artifacts/ClipPlus-Setup.exe.sha256
+            artifacts/ClipPlus-Setup-FaultTest.exe
+            artifacts/THIRD-PARTY-NOTICES.txt
+            artifacts/LICENSE.txt
+            tests/ClipPlus.WindowsSmoke/bin/Release/net472/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows core, native and performance
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ClipPlus-Candidate
+          path: .
+          digest-mismatch: error
+      - name: Test core on Windows
+        run: dotnet test tests/ClipPlus.Tests/ClipPlus.Tests.csproj -c Release --verbosity minimal
+      - name: Run Framework native clipboard and WPF smoke
+        shell: pwsh
+        run: |
+          & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop
+          exit $LASTEXITCODE
+      - name: Measure released-source baseline and candidate WPF performance
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | Format-List
+          New-Item -ItemType Directory -Path TestResults -Force | Out-Null
+          $baseline = Join-Path $env:RUNNER_TEMP 'clipplus-performance-v026'
+          git fetch --no-tags origin refs/tags/v0.2.6:refs/tags/v0.2.6
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $baseline d43d0047f5c6daea74ae02249473a92cd7808673
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          try {
+            $source = Join-Path $baseline 'tests/ClipPlus.WindowsSmoke'
+            Copy-Item tests/ClipPlus.WindowsSmoke/Program.Benchmark.cs $source
+            dotnet build (Join-Path $source 'ClipPlus.WindowsSmoke.csproj') -c Release
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & (Join-Path $source 'bin/Release/net472/ClipPlus.WindowsSmoke.exe') --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v026.txt
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & ./tests/ClipPlus.WindowsSmoke/bin/Release/net472/ClipPlus.WindowsSmoke.exe --isolated-desktop --popup-benchmark | Tee-Object TestResults/performance-v027.txt
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            foreach ($file in @('TestResults/performance-v026.txt','TestResults/performance-v027.txt')) {
+              if (-not (Select-String -Path $file -Pattern 'BENCH first-open-recent') -or
+                  -not (Select-String -Path $file -Pattern 'BENCH idle-quick-expanded') -or
+                  -not (Select-String -Path $file -Pattern 'BENCH motion-quick-expanded')) {
+                throw "Interactive WPF benchmark incomplete: $file"
+              }
+            }
+            if (-not (Select-String -Path TestResults/performance-v027.txt -Pattern 'BENCH floating-expand-final') -or
+                -not (Select-String -Path TestResults/performance-v027.txt -Pattern 'BENCH idle-floating-after-cycles')) {
+              throw 'Floating transition and resource measurements did not run.'
+            }
+          } finally { git worktree remove --force $baseline }
+      - name: Upload synthetic popup visual evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ClipPlus-UI-Evidence
+          path: |
+            TestResults/categories-*.png
+            TestResults/quick-*.png
+            TestResults/performance-*.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  lifecycle:
+    name: Lifecycle (${{ matrix.suite }})
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [candidate, fresh-faults, releases]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ClipPlus-Candidate
+          path: .
+          digest-mismatch: error
+      - name: Retrieve the three most recent stable predecessors
+        if: matrix.suite == 'releases'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          $legacy = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.1.0'
-          gh release download v0.1.0 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $legacy
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $previous = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.0'
-          gh release download v0.2.0 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $previous
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $stable = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.1'
-          gh release download v0.2.1 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $stable
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $quick = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.2'
-          gh release download v0.2.2 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $quick
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $width = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.3'
-          gh release download v0.2.3 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $width
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $floating = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.4'
-          gh release download v0.2.4 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $floating
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $glass = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.5'
-          gh release download v0.2.5 --repo AChWorks/clipplus --pattern ClipPlus-Setup.exe --dir $glass
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Exercise portable and installer lifecycle on isolated Windows
+          REPOSITORY: ${{ github.repository }}
+        run: ./tests/Get-UpgradeFixtures.ps1 -Repository $env:REPOSITORY -FixtureDirectory (Join-Path $env:RUNNER_TEMP 'clipplus-released')
+      - name: Record exact upgrade fixture identities
+        if: matrix.suite == 'releases'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ClipPlus-Upgrade-Evidence
+          path: ${{ runner.temp }}/clipplus-released/fixtures.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Exercise lifecycle on isolated Windows
         shell: pwsh
+        env:
+          SUITE: ${{ matrix.suite }}
         run: |
-          $legacy = Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.1.0'
-          ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe -LegacySetup (Join-Path $legacy 'ClipPlus-Setup.exe') -PreviousSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.0/ClipPlus-Setup.exe') -StableSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.1/ClipPlus-Setup.exe') -QuickSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.2/ClipPlus-Setup.exe') -WidthSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.3/ClipPlus-Setup.exe') -FloatingSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.4/ClipPlus-Setup.exe') -GlassSetup (Join-Path $env:RUNNER_TEMP 'clipplus-released-v0.2.5/ClipPlus-Setup.exe')
+          ./tests/Install-Smoke.ps1 -Setup artifacts/ClipPlus-Setup.exe -Portable artifacts/ClipPlus.exe -FaultSetup artifacts/ClipPlus-Setup-FaultTest.exe -FixtureDirectory (Join-Path $env:RUNNER_TEMP 'clipplus-released') -Suite $env:SUITE
+
+  verified:
+    name: Verified release candidate
+    needs: [build, windows, lifecycle]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ClipPlus-Candidate
+          path: .
+          digest-mismatch: error
+      - name: Verify original build checksums
+        shell: bash
+        working-directory: artifacts
+        run: |
+          sha256sum --check ClipPlus.exe.sha256 ClipPlus-Setup.exe.sha256
       - name: Upload verified candidate files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
