@@ -457,18 +457,31 @@ internal static partial class InstalledFlow
     internal static int RunQuickTarget(string[] args)
     {
         var application = new Application();
-        var editor = new TextBox { AcceptsReturn = true, FontSize = 18, Margin = new Thickness(8) };
-        AutomationProperties.SetName(editor, "Second synthetic editor");
+        FrameworkElement content;
+        if (args.Contains("--click-counter"))
+        {
+            var button = new Button { Content = "0" };
+            AutomationProperties.SetAutomationId(button, "OutsideGestureCounter");
+            var count = 0;
+            button.Click += (_, _) => button.Content = (++count).ToString(CultureInfo.InvariantCulture);
+            content = button;
+        }
+        else
+        {
+            var editor = new TextBox { AcceptsReturn = true, FontSize = 18, Margin = new Thickness(8) };
+            AutomationProperties.SetName(editor, "Second synthetic editor");
+            content = editor;
+        }
         var window = new Window
         {
             Title = "ClipPlus independent synthetic paste target",
-            Content = editor,
+            Content = content,
             Width = int.Parse(Argument(args, "--width"), CultureInfo.InvariantCulture), Height = 180,
             WindowStartupLocation = WindowStartupLocation.Manual,
             Left = int.Parse(Argument(args, "--left"), CultureInfo.InvariantCulture),
             Top = int.Parse(Argument(args, "--top"), CultureInfo.InvariantCulture)
         };
-        window.Loaded += (_, _) => editor.Focus();
+        window.Loaded += (_, _) => content.Focus();
         return application.Run(window);
     }
 

@@ -269,48 +269,15 @@ internal static partial class Program
             Check(popup.IsVisible && !icon.IsVisible, "session reopens after stop recovery");
 
             VerifyBoundsTimeline();
-            var originalNormal = get().Geometry(false);
-            foreach (var resize in new[] { false, true })
-            {
-                var previousAnchor = icon.Position;
-                VerifyDelayedGeometryGesture(popup, resize);
-                var geometry = get().QuickPanel;
-                Check(geometry.Position is not null && search.Text == query &&
-                    Native.GetForegroundWindow() == targetHwnd && get().Geometry(false) == originalNormal,
-                    "delayed native gesture preserves query, focus and independent ordinary geometry");
-                // Move the target only if the deliberate fixture move
-                // covered it. Keep the actual click strictly outside.
-                Check(Native.GetWindowRect(popup.Handle, out var moved), "read final delayed gesture bounds");
-                if (center.X >= moved.Left && center.X < moved.Right && center.Y >= moved.Top && center.Y < moved.Bottom)
-                {
-                    var targetX = moved.Left - work.Left >= width ? work.Left : work.Right - width;
-                    Check(Native.SetWindowPos(targetHwnd, 0, targetX, work.Top, width, height, 0x0014),
-                        "keep external test button outside moved popup");
-                    target.UpdateLayout();
-                    center = targetButton.PointToScreen(new Point(targetButton.ActualWidth / 2, targetButton.ActualHeight / 2));
-                }
-                Check(center.X < moved.Left || center.X >= moved.Right || center.Y < moved.Top || center.Y >= moved.Bottom,
-                    "subsequent test gesture is genuinely outside final bounds");
-                var count = clicks;
-                ClickTarget();
-                PumpUntil(() => clicks == count + 1 && icon.IsVisible);
-                Check(clicks == count + 1 && icon.IsVisible && !popup.IsVisible &&
-                    icon.Position.X == previousAnchor.X && icon.Position.Y == previousAnchor.Y,
-                    "first outside click after delayed geometry arrives once and preserves icon anchor");
-                popup.OpenFloatingPanel();
-                Check(popup.IsVisible && !icon.IsVisible && search.Text == query &&
-                    Native.GetForegroundWindow() == targetHwnd && get().QuickPanel == geometry,
-                    "reopen after delayed geometry preserves preferred dimensions, query and focus");
-                // Reopen uses the original icon anchor. Restore the
-                // external fixture's original location for the idle cases.
-                Check(Native.SetWindowPos(targetHwnd, 0, x, y, width, height, 0x0014),
-                    "restore external test button position");
-                target.UpdateLayout();
-                center = targetButton.PointToScreen(new Point(targetButton.ActualWidth / 2, targetButton.ActualHeight / 2));
-                Check(Native.GetWindowRect(popup.Handle, out var reopened) &&
-                    (center.X < reopened.Left || center.X >= reopened.Right || center.Y < reopened.Top || center.Y >= reopened.Bottom),
-                    "external target remains outside reopened panel");
-            }
+            // Use a distinct foreground process for the native modal loop,
+            // as in the installed tests. Two WPF windows sharing the popup's
+            // input thread are not an independent activation target.
+            VerifyDelayedGeometryGestures(popup, icon, query, get);
+            target.Activate();
+            Native.SetForegroundWindow(targetHwnd);
+            PumpUntil(() => Native.GetForegroundWindow() == targetHwnd);
+            Check(Native.GetForegroundWindow() == targetHwnd && popup.IsVisible && !icon.IsVisible,
+                "restore original external fixture for idle regression");
 
             // The native Raw Input registration remains active without
             // movement, resize, focus changes or periodic hook renewal.

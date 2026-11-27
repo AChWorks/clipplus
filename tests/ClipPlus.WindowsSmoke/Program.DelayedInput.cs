@@ -1,4 +1,9 @@
 using System;
+using System.Diagnostics;
+using System.Globalization;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using ClipPlus.Core;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
@@ -136,6 +141,86 @@ internal static partial class Program
         Check(input.Join(TimeSpan.FromSeconds(2)), "native drag input worker completed");
         if (failure is not null) throw new InvalidOperationException("Delayed native drag input failed.", failure);
         InstalledFlow.Pump(TimeSpan.FromMilliseconds(150));
+    }
+
+    private static void VerifyDelayedGeometryGestures(PopupWindow popup, FloatingIconWindow icon,
+        string query, Func<Preferences> get)
+    {
+        Check(Native.GetWindowRect(popup.Handle, out var bounds), "read delayed-input fixture monitor");
+        var monitor = Native.MonitorFromRect(ref bounds, 2);
+        var work = PopupWindow.MonitorWorkArea(monitor);
+        var scale = PopupWindow.MonitorScale(monitor);
+        var targetWidth = Math.Min(180, (int)((work.Right - work.Left) / scale / 4));
+        var targetLeft = (int)(work.Right / scale) - targetWidth;
+        var targetTop = (int)(work.Top / scale);
+        var ownExe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        using var other = Process.Start(new ProcessStartInfo(ownExe,
+            FormattableString.Invariant($"--isolated-desktop --quick-target --click-counter --left {targetLeft} --top {targetTop} --width {targetWidth}"))
+        { UseShellExecute = false }) ?? throw new InvalidOperationException("Could not launch delayed-input target.");
+        try
+        {
+            nint target = 0;
+            PumpUntil(() =>
+            {
+                other.Refresh();
+                if (other.HasExited) throw new InvalidOperationException("Delayed-input target exited.");
+                target = other.MainWindowHandle;
+                return target != 0 && Native.GetWindowThreadProcessId(target, out var pid) != 0 &&
+                    pid == (uint)other.Id && Native.GetForegroundWindow() == target;
+            }, TimeSpan.FromSeconds(5));
+            Check(target != 0 && Native.GetForegroundWindow() == target && Native.IsNoActivate(popup.Handle),
+                "independent target process owns foreground before delayed geometry gestures");
+            AutomationElement Counter() => AutomationElement.FromHandle(target).FindFirst(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.AutomationIdProperty, "OutsideGestureCounter"))
+                ?? throw new InvalidOperationException("Missing external click counter.");
+            int Clicks() => int.Parse(Counter().Current.Name, CultureInfo.InvariantCulture);
+            var normal = get().Geometry(false);
+            var search = (TextBox)popup.FindName("SearchBox");
+            foreach (var resize in new[] { false, true })
+            {
+                var anchor = icon.Position;
+                var count = Clicks();
+                VerifyDelayedGeometryGesture(popup, resize);
+                var geometry = get().QuickPanel;
+                Check(Native.GetWindowRect(popup.Handle, out var moved), "read final delayed gesture bounds");
+                Check(geometry.Position is { } position && position.X == moved.Left && position.Y == moved.Top,
+                    "delayed native geometry persists actual final position");
+                Check(Math.Abs(geometry.Width - (moved.Right - moved.Left) / scale) <= 2 &&
+                    Math.Abs(geometry.Height - (moved.Bottom - moved.Top) / scale) <= 2,
+                    "delayed native gesture persists preferred dimensions");
+                Check(search.Text == query && get().Geometry(false) == normal,
+                    "delayed native gesture preserves query and independent ordinary geometry");
+                Check(Native.GetForegroundWindow() == target, "delayed native gesture preserves independent foreground");
+                Check(Clicks() == count, "internal delayed geometry gesture did not click the external target");
+                // Choose a point in the target that is outside the final
+                // popup. Never send an extra click to make a test pass.
+                var rect = Counter().Current.BoundingRectangle;
+                var center = new[] { 0.5, 0.8, 0.2 }.SelectMany(y => new[] { 0.5, 0.8, 0.2 }
+                    .Select(x => (X: (int)(rect.Left + rect.Width * x), Y: (int)(rect.Top + rect.Height * y))))
+                    .First(p => p.X < moved.Left || p.X >= moved.Right || p.Y < moved.Top || p.Y >= moved.Bottom);
+                Check(Native.SetCursorPos(center.X, center.Y), "move to independent outside counter");
+                InstalledFlow.Pump(TimeSpan.FromMilliseconds(80));
+                InstalledFlow.SendMouse(0x0002);
+                try { InstalledFlow.Pump(TimeSpan.FromMilliseconds(80)); }
+                finally { InstalledFlow.SendMouse(0x0004); }
+                PumpUntil(() => icon.IsVisible && Clicks() == count + 1, TimeSpan.FromSeconds(5));
+                Check(Clicks() == count + 1 && icon.IsVisible && !popup.IsVisible &&
+                    icon.Position.X == anchor.X && icon.Position.Y == anchor.Y,
+                    "first outside click after delayed geometry arrives once and preserves icon anchor");
+                popup.OpenFloatingPanel();
+                Check(popup.IsVisible && !icon.IsVisible && search.Text == query &&
+                    Native.GetForegroundWindow() == target && get().QuickPanel == geometry,
+                    "reopen after delayed geometry preserves preferred dimensions, query and independent foreground");
+            }
+        }
+        finally
+        {
+            if (!other.HasExited)
+            {
+                other.CloseMainWindow();
+                if (!other.WaitForExit(3000)) { other.Kill(); other.WaitForExit(); }
+            }
+        }
     }
 
     private static void VerifyDelayedGeometryGesture(PopupWindow popup, bool resize)
