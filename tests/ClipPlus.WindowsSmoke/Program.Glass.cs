@@ -28,6 +28,40 @@ internal static partial class Program
             state + ": all four outer corners are transparent, panel body stays opaque");
     }
 
+    private static void VerifyRoundedSearch(PopupWindow popup, string state)
+    {
+        popup.UpdateLayout();
+        var search = (TextBox)popup.FindName("SearchBox");
+        var surface = (Border)search.Template.FindName("SearchSurface", search);
+        var host = (ScrollViewer)search.Template.FindName("PART_ContentHost", search);
+        var borderResource = search.IsKeyboardFocused ? "FocusBrush" :
+            search.IsMouseOver ? "MutedBrush" : "BorderBrush";
+        Check(surface.CornerRadius == new CornerRadius(4) &&
+            surface.BorderThickness == new Thickness(1) &&
+            surface.RenderSize == search.RenderSize &&
+            Math.Abs(search.ActualHeight - 34) <= 0.5 &&
+            search.Padding == new Thickness(28, 5, 6, 5) &&
+            !host.Focusable && host.Content is not null,
+            state + ": rounded 4-DIP search surface retains native text host and layout");
+        Check(surface.Background is SolidColorBrush background &&
+            background.Color == ((SolidColorBrush)popup.FindResource("FieldBrush")).Color &&
+            surface.BorderBrush is SolidColorBrush border &&
+            border.Color == ((SolidColorBrush)popup.FindResource(borderResource)).Color,
+            state + ": search uses the current theme and focus/hover state");
+        // Render just the actual shared TextBox, not a synthetic shape.
+        var dpi = VisualTreeHelper.GetDpi(search);
+        var image = new RenderTargetBitmap((int)Math.Ceiling(search.ActualWidth * dpi.DpiScaleX),
+            (int)Math.Ceiling(search.ActualHeight * dpi.DpiScaleY), 96 * dpi.DpiScaleX,
+            96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+        image.Render(search);
+        var w = image.PixelWidth;
+        var h = image.PixelHeight;
+        Check(PixelAlpha(image, 0, 0) < 128 && PixelAlpha(image, w - 1, 0) < 128 &&
+            PixelAlpha(image, 0, h - 1) < 128 && PixelAlpha(image, w - 1, h - 1) < 128 &&
+            PixelAlpha(image, w / 2, h / 2) == 255,
+            state + ": actual search render has rounded corners and an opaque field");
+    }
+
     private static void VerifyGlassIcon(FloatingIconWindow icon, int outsideX, int outsideY)
     {
         var button = (Button)icon.FindName("FloatingButton");

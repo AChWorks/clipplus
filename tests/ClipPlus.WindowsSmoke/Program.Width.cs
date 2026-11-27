@@ -163,6 +163,7 @@ internal static partial class Program
                 Fits(Find(row, name), row, 22);
             VerifyPanelSpacing(popup, false, "ordinary compact narrow");
             VerifyRoundedPanel(popup, "ordinary compact narrow");
+            VerifyRoundedSearch(popup, "ordinary compact narrow");
             SavePopupEvidence(popup, "categories-compact-narrow");
 
             var swatch = Find(row, "Choose color, current Green");
@@ -227,6 +228,7 @@ internal static partial class Program
             Fits(icon, popup, 18);
             VerifyPanelSpacing(popup, false, "quick narrow light");
             VerifyRoundedPanel(popup, "quick narrow light");
+            VerifyRoundedSearch(popup, "quick narrow light");
             SavePopupEvidence(popup, "quick-narrow-light");
             popup.ApplyTheme(true, false);
             VerifyPanelSpacing(popup, false, "quick narrow dark");

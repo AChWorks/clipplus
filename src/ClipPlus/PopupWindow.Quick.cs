@@ -23,26 +23,28 @@ public partial class PopupWindow
     private void OnQuickSearchMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (!IsQuickMode || e.ChangedButton != MouseButton.Left) return;
-        Run(() =>
+        Run(ActivateQuickSearch);
+    }
+
+    private void ActivateQuickSearch()
+    {
+        var hwnd = Handle;
+        var foreground = Native.GetForegroundWindow();
+        if (foreground != hwnd) _searchTarget = Native.ExternalTarget(foreground);
+        // Search interaction (including an explicit icon click) temporarily
+        // permits activation. Retain the validated external paste target.
+        Native.SetNoActivate(hwnd, false);
+        if (foreground != hwnd)
         {
-            var hwnd = Handle;
-            var foreground = Native.GetForegroundWindow();
-            if (foreground != hwnd) _searchTarget = Native.ExternalTarget(foreground);
-            // A passive quick window must not acquire WPF keyboard focus.
-            // Only explicit search interaction temporarily permits activation.
-            Native.SetNoActivate(hwnd, false);
-            if (foreground != hwnd)
-            {
-                Activate();
-                if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
-            }
-            if (Native.GetForegroundWindow() == hwnd) FocusSearch();
-            else
-            {
-                _searchTarget = null;
-                Native.SetNoActivate(hwnd, true);
-            }
-        });
+            Activate();
+            if (Native.GetForegroundWindow() != hwnd) Native.SetForegroundWindow(hwnd);
+        }
+        if (Native.GetForegroundWindow() == hwnd) FocusSearch();
+        else
+        {
+            _searchTarget = null;
+            Native.SetNoActivate(hwnd, true);
+        }
     }
 
     private void SetQuickAppearance(bool quick)

@@ -216,6 +216,7 @@ internal static partial class Program
                 popup.ApplyTheme(theme.Dark, theme.Contrast);
                 VerifyPanelSpacing(popup, true, "ordinary overflow " + theme.Name);
                 VerifyRoundedPanel(popup, "ordinary overflow " + theme.Name);
+                VerifyRoundedSearch(popup, "ordinary overflow " + theme.Name);
                 SavePopupEvidence(popup, "categories-spacing-" + theme.Name);
             }
             popup.ApplyTheme(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
@@ -269,6 +270,7 @@ internal static partial class Program
             PumpUntil(() => search.IsKeyboardFocused);
             Check(search.IsKeyboardFocused && Native.GetForegroundWindow() == popup.Handle,
                 "keyboard navigation has active search focus");
+            VerifyRoundedSearch(popup, "ordinary active search");
             list.SelectedIndex = 0;
             for (var i = 0; i < 16; i++)
             {
