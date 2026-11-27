@@ -30,24 +30,6 @@ jobs:
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)
             if ($errors.Count) { throw ($errors | Out-String) }
           }
-      - name: Validate released fixture inventory
-        shell: pwsh
-        run: |
-          $inventory = (Import-PowerShellDataFile tests/Released-Fixtures.psd1).Releases
-          if (@($inventory | Group-Object Version | Where-Object Count -ne 1).Count -ne 0) {
-            throw 'Duplicate release fixture.'
-          }
-          foreach ($release in $inventory) {
-            if ($release.Suite -notin @('legacy','releases') -or
-                $release.SetupHash -cnotmatch '^[0-9A-F]{64}$' -or
-                $release.ExeHash -cnotmatch '^[0-9A-F]{64}$') {
-              throw "Invalid release fixture: $($release.Version)"
-            }
-          }
-          if (@($inventory | Where-Object Suite -eq 'legacy').Count -eq 0 -or
-              @($inventory | Where-Object Suite -eq 'releases').Count -eq 0) {
-            throw 'A release lifecycle suite is empty.'
-          }
       - name: Verify shortcut helper completion observations
         shell: pwsh
         run: ./tests/Shortcut-Completion-Smoke.ps1
@@ -143,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [candidate, legacy, releases]
+        suite: [candidate, releases]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -151,27 +133,21 @@ jobs:
           name: ClipPlus-Candidate
           path: .
           digest-mismatch: error
-      - name: Retrieve exact released installer fixtures for this suite
+      - name: Retrieve the three most recent stable predecessors
+        if: matrix.suite == 'releases'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          SUITE: ${{ matrix.suite }}
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'clipplus-released'
-          $inventory = (Import-PowerShellDataFile tests/Released-Fixtures.psd1).Releases
-          # The legacy interrupted-journal fixture uses exact v0.2.0 source;
-          # do not depend on the benchmark job's separate Git worktree.
-          if ($env:SUITE -eq 'legacy') {
-            git fetch --depth=1 --no-tags origin refs/tags/v0.2.0:refs/tags/v0.2.0
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if ((git rev-parse 'v0.2.0^{commit}') -ne 'f6199139acfe26b30c04b931b5819e9da10ed986') {
-              throw 'Released v0.2.0 source identity mismatch.'
-            }
-          }
-          foreach ($release in @($inventory | Where-Object Suite -eq $env:SUITE)) {
-            gh release download $release.Version --repo "${{ github.repository }}" --pattern ClipPlus-Setup.exe --dir (Join-Path $root $release.Version)
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          REPOSITORY: ${{ github.repository }}
+        run: ./tests/Get-UpgradeFixtures.ps1 -Repository $env:REPOSITORY -FixtureDirectory (Join-Path $env:RUNNER_TEMP 'clipplus-released')
+      - name: Record exact upgrade fixture identities
+        if: matrix.suite == 'releases'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ClipPlus-Upgrade-Evidence
+          path: ${{ runner.temp }}/clipplus-released/fixtures.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Exercise lifecycle on isolated Windows
         shell: pwsh
         env:

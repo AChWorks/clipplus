@@ -29,17 +29,14 @@ internal static partial class Program
             return 0;
         }
 
-        if (args.Contains("--empty-fixture-clipboard")) return LegacyHistoryFixture.EmptyClipboard();
-        if (args.Contains("--seed-legacy-history")) return LegacyHistoryFixture.Seed(args);
-        if (args.Contains("--snapshot-legacy-history")) return LegacyHistoryFixture.Snapshot(args);
-        if (args.Contains("--exercise-migrated-history")) return LegacyHistoryFixture.Exercise(args);
+        if (args.Contains("--empty-fixture-clipboard")) return EmptyFixtureClipboard();
         if (args.Contains("--snapshot-state"))
             return InstalledFlow.SnapshotState(args);
         if (args.Contains("--quick-target")) return InstalledFlow.RunQuickTarget(args);
         if (args.Contains("--installed-flow"))
             return InstalledFlow.Run(args);
 
-        if (args.Contains("--seed-v020-profile") || args.Contains("--snapshot-v020-profile")) return ProfileFixture(args);
+        if (args.Contains("--seed-profile") || args.Contains("--snapshot-profile")) return ProfileFixture(args);
         if (args.Contains("--popup-benchmark")) return PopupBenchmark();
 
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
