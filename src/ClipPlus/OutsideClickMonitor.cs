@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -18,7 +19,12 @@ internal sealed class OutsideClickMonitor : IDisposable
     private readonly nint _window;
     private readonly int _generation;
     private readonly Thread _thread;
-    private readonly ManualResetEvent _stop = new(false);
+    private readonly BoundsTimeline _bounds;
+    private nint _sink;
+    private const int WmBoundsChanged = 0x8005;
+    private bool _boundsWakePending;
+    private volatile bool _boundsPending;
+    private readonly ManualResetEvent _stop;
     private readonly Func<EventWaitHandle, bool>? _signalStop;
     private Exception? _startError;
     private uint _outsideButtons;
@@ -33,6 +39,10 @@ internal sealed class OutsideClickMonitor : IDisposable
         _window = window;
         _generation = generation;
         _signalStop = signalStop;
+        if (!Native.GetWindowRect(window, out var initialBounds))
+            throw Native.Error("Read initial expanded panel bounds");
+        _bounds = new BoundsTimeline(initialBounds);
+        _stop = new ManualResetEvent(false);
         using var ready = new ManualResetEvent(false);
         _thread = new Thread(() =>
         {
@@ -47,6 +57,7 @@ internal sealed class OutsideClickMonitor : IDisposable
                 if (sink == 0) throw Native.Error("CreateWindowEx (outside-click input sink)");
                 RegisterMouse(sink, Native.RidevInputSink);
                 registered = true;
+                _sink = sink;
             }
             catch (Exception ex) { _startError = ex; }
             finally { ready.Set(); }
@@ -92,6 +103,87 @@ internal sealed class OutsideClickMonitor : IDisposable
             throw Native.Error(flags == Native.RidevRemove ? "Unregister raw mouse input" : "Register raw mouse input");
     }
 
+    // The popup's native geometry notification runs on the UI thread.
+    // Keep only geometry boundaries still needed by queued mouse input,
+    // never pointer samples. The observer never waits for the UI thread.
+    internal void BoundsChanged()
+    {
+        if (!IsRunning) return;
+        var tick = (long)Native.GetTickCount64();
+        if (!Native.GetWindowRect(_window, out var bounds))
+            throw Native.Error("Read changed expanded panel bounds");
+        lock (_bounds)
+        {
+            if (!_bounds.Record(tick, bounds)) return;
+            _boundsPending = true;
+            if (_boundsWakePending) return;
+            // Even a programmatic geometry change with no mouse traffic
+            // gets an opportunity to retire old snapshots. Coalesce wakes.
+            if (!Native.PostMessage(_sink, WmBoundsChanged, 0, 0))
+                throw Native.Error("Post outside-click geometry notification");
+            _boundsWakePending = true;
+        }
+    }
+
+    private void RetireDrainedBounds(nint sink)
+    {
+        // Posted wake messages may overtake raw input. Only discard old
+        // bounds after checking the actual raw queue, not wake ordering.
+        var tick = (long)Native.GetTickCount64();
+        if (Native.PeekMessage(out _, sink, Native.WmInput, Native.WmInput, 0)) return;
+        lock (_bounds)
+        {
+            _bounds.RetireBefore(tick);
+            _boundsPending = _bounds.HasTransitions;
+        }
+    }
+
+    // A session-local timeline of actual window rectangles, not a second
+    // geometry authority. Native notifications supply the transitions;
+    // queued input supplies the retirement watermark. Equal-tick changes
+    // have no finer native ordering: prefer inside if either rectangle
+    // contains the press, rather than turning an internal drag into a click.
+    internal sealed class BoundsTimeline
+    {
+        private readonly LinkedList<(long Tick, Native.Rect Rect)> _entries = new();
+
+        internal bool HasTransitions => _entries.Count > 1;
+
+        internal BoundsTimeline(Native.Rect initial) => _entries.AddLast((long.MinValue, initial));
+
+        internal bool Record(long tick, Native.Rect rect)
+        {
+            var previous = _entries.Last!.Value.Rect;
+            if (previous.Left == rect.Left && previous.Top == rect.Top &&
+                previous.Right == rect.Right && previous.Bottom == rect.Bottom) return false;
+            _entries.AddLast((tick, rect));
+            return true;
+        }
+
+        internal void RetireBefore(long tick)
+        {
+            // Preserve the predecessor of the first boundary at/after
+            // tick. Inputs sharing the boundary tick can still arrive.
+            while (_entries.First!.Next is { } next && next.Value.Tick < tick)
+                _entries.RemoveFirst();
+        }
+
+        internal bool ContainsAt(long tick, Native.Point point)
+        {
+            RetireBefore(tick);
+            var entry = _entries.First!;
+            do
+            {
+                var r = entry.Value.Rect;
+                if (point.X >= r.Left && point.X < r.Right && point.Y >= r.Top && point.Y < r.Bottom)
+                    return true;
+                entry = entry.Next;
+            }
+            while (entry is not null && entry.Value.Tick == tick);
+            return false;
+        }
+    }
+
     private void Pump(nint sink)
     {
         var handles = new[] { _stop.SafeWaitHandle.DangerousGetHandle() };
@@ -109,6 +201,12 @@ internal sealed class OutsideClickMonitor : IDisposable
             if (!Native.PeekMessage(out var message, 0, 0, 0, 1)) continue;
             if (message.Id == 0x0012)
                 throw new InvalidOperationException("Outside-click message loop quit unexpectedly.");
+            if (message.Hwnd == sink && message.Id == WmBoundsChanged)
+            {
+                lock (_bounds) _boundsWakePending = false;
+                RetireDrainedBounds(sink);
+                continue;
+            }
             if (message.Hwnd != sink || message.Id != Native.WmInput)
             {
                 Native.DispatchMessageW(ref message);
@@ -123,7 +221,7 @@ internal sealed class OutsideClickMonitor : IDisposable
                 // The registration is mouse-only; do not interpret another
                 // packet type or a truncated native structure as a gesture.
                 if (read == packetSize && input.Header.Type == 0)
-                    ObserveButtons(input.Mouse.ButtonFlags, message.Point);
+                    ObserveButtons(input.Mouse.ButtonFlags, message.Point, message.Time);
             }
             finally
             {
@@ -133,20 +231,29 @@ internal sealed class OutsideClickMonitor : IDisposable
         }
     }
 
-    private void ObserveButtons(uint flags, Native.Point point)
+    private void ObserveButtons(uint flags, Native.Point point, uint messageTime)
     {
         // RAWMOUSE RI_MOUSE_BUTTON_1..5 use alternating down/up bits.
         // Track each button independently; ignore wheel and motion data.
         const uint downBits = 0x0155;
         var down = flags & downBits;
         var up = (flags >> 1) & downBits;
-        if (down != 0)
+        // Advance the geometry watermark on motion too, but only while
+        // a transition is pending. The usual idle/motion path needs no
+        // geometry query, allocation, or lock.
+        if (down != 0 || _boundsPending)
         {
-            _outsideButtons &= ~down;
-            if (!Native.GetWindowRect(_window, out var rect))
-                throw Native.Error("Read expanded panel bounds for outside click");
-            if (point.X < rect.Left || point.X >= rect.Right || point.Y < rect.Top || point.Y >= rect.Bottom)
-                _outsideButtons |= down;
+            var tick = Native.MessageTick(messageTime, Native.GetTickCount64());
+            lock (_bounds)
+            {
+                if (down != 0)
+                {
+                    _outsideButtons &= ~down;
+                    if (!_bounds.ContainsAt(tick, point)) _outsideButtons |= down;
+                }
+                else _bounds.RetireBefore(tick);
+                _boundsPending = _bounds.HasTransitions;
+            }
         }
         var outsideRelease = (_outsideButtons & up) != 0;
         _outsideButtons &= ~up;

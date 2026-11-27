@@ -241,6 +241,11 @@ public partial class PopupWindow : Window
             // capture only when Windows supplies no external HWND.
             _searchTarget = Native.ExternalTarget(lParam) ?? _searchTarget;
         }
+        // WM_WINDOWPOSCHANGED observes the actual native rectangle,
+        // including native drag/resize, DPI placement and programmatic
+        // moves. It does not consume the message or change persistence.
+        if (message == 0x0047 && _outsideClick is { } observer)
+            Run(observer.BoundsChanged);
         if (message == 0x0231) // WM_ENTERSIZEMOVE
         {
             _inMoveSize = !_placing && Native.GetWindowRect(hwnd, out _moveStart);

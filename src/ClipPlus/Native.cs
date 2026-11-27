@@ -80,6 +80,14 @@ internal static class Native
     internal static extern nint GetModuleHandle(string? name);
     [DllImport("kernel32.dll")]
     internal static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")]
+    internal static extern ulong GetTickCount64();
+
+    // MSG.time is the low DWORD of Windows elapsed time. Extend it near
+    // the current tick, including across the 32-bit wrap boundary.
+    internal static long MessageTick(uint time, ulong now) =>
+        (long)now + unchecked((int)(time - (uint)now));
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostMessage(nint hwnd, int message, nint wParam, nint lParam);
