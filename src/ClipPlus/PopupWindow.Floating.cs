@@ -66,7 +66,7 @@ public partial class PopupWindow
             if (!Native.GetWindowRect(Handle, out var rect)) throw Native.Error("GetWindowRect (quick panel)");
             if (_floatingIcon is null)
             {
-                var icon = new FloatingIconWindow(OpenFloatingPanel, SaveIconPosition, _report);
+                var icon = new FloatingIconWindow(() => { if (OpenFloatingPanel()) ActivateQuickSearch(); }, SaveIconPosition, _report);
                 icon.Closed += (_, _) => _floatingIcon = null;
                 _floatingIcon = icon;
             }
@@ -94,9 +94,9 @@ public partial class PopupWindow
         }
     }
 
-    internal void OpenFloatingPanel()
+    internal bool OpenFloatingPanel()
     {
-        if (!IsQuickMode || IsVisible || _floatingIcon is not { IsVisible: true } icon) return;
+        if (!IsQuickMode || IsVisible || _floatingIcon is not { IsVisible: true } icon) return false;
         var anchor = icon.Position;
         _floatingAnchor = anchor;
         _placing = true;
@@ -128,6 +128,7 @@ public partial class PopupWindow
         // Starting the observer is optional for using the expanded panel.
         // Do not roll back the visible surface on observer startup failure.
         UpdateOutsideClickMonitor();
+        return true;
     }
 
     internal void QuickBehaviorChanged() => Run(() =>

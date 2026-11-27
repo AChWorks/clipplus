@@ -227,9 +227,9 @@ public partial class PopupWindow : Window
         }
         if (IsQuickMode && message == 0x0021) // WM_MOUSEACTIVATE
         {
-            // Deliver the mouse gesture without activating. The search box
-            // explicitly activates on its own pointer-down, after capturing
-            // the still-active external window.
+            // Deliver the mouse gesture without activating. Explicit search
+            // activation captures the still-active external window; other
+            // interactions with the expanded panel stay passive.
             handled = true;
             return 3; // MA_NOACTIVATE
         }

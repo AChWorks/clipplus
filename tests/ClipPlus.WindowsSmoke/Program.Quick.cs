@@ -69,12 +69,14 @@ internal static partial class Program
                 "quick list excludes recent clips and virtualizes hundreds of pins");
             VerifyPanelSpacing(popup, true, "quick overflowing");
             VerifyRoundedPanel(popup, "quick overflowing");
+            VerifyRoundedSearch(popup, "quick overflowing");
             SavePopupEvidence(popup, "quick-overflow");
             foreach (var theme in new[] { (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
             {
                 popup.ApplyTheme(theme.Dark, theme.Contrast);
                 VerifyPanelSpacing(popup, true, "quick overflow " + theme.Name);
                 VerifyRoundedPanel(popup, "quick overflow " + theme.Name);
+                VerifyRoundedSearch(popup, "quick overflow " + theme.Name);
                 SavePopupEvidence(popup, "quick-spacing-" + theme.Name);
             }
             popup.ApplyTheme(Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
@@ -359,6 +361,12 @@ internal static partial class Program
         PumpUntil(() => popup.IsActive && search.IsKeyboardFocused);
         Check(popup.IsActive && search.IsKeyboardFocused && list.Items.Count == 2 && list.SelectedIndex == 0,
             "quick keyboard selection starts in active search with two results");
+        foreach (var theme in new[] { (Dark: false, Contrast: false, Name: "light"), (Dark: true, Contrast: false, Name: "dark"), (Dark: false, Contrast: true, Name: "high-contrast") })
+        {
+            popup.ApplyTheme(theme.Dark, theme.Contrast);
+            VerifyRoundedSearch(popup, "quick focused search " + theme.Name);
+            SavePopupEvidence(popup, "quick-focused-search-" + theme.Name);
+        }
 
         (ListBoxItem Row, Border Card, Border Outline) Visual(int index)
         {
@@ -419,6 +427,7 @@ internal static partial class Program
                 Check(Enumerable.Range(0, 2).All(i => ColorOf(Visual(i).Outline.BorderBrush).A == 0) &&
                     Visual(0).Row.RenderSize == firstSize && Visual(1).Row.RenderSize == secondSize,
                     $"passive quick rows remain borderless and stable (dark={theme.Dark}, highContrastMapping={theme.HighContrast})");
+                VerifyRoundedSearch(popup, $"quick passive search (dark={theme.Dark}, highContrastMapping={theme.HighContrast})");
             }
         }
         finally { target.Close(); }

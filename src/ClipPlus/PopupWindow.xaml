@@ -172,6 +172,32 @@
                 <Setter Property="BorderThickness" Value="1"/>
                 <Setter Property="VerticalContentAlignment" Value="Center"/>
             </Style>
+            <Style x:Key="RoundedSearchBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                            <Border x:Name="SearchSurface" CornerRadius="4" SnapsToDevicePixels="True"
+                                    Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}">
+                                <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                              HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="SearchSurface" Property="BorderBrush" Value="{DynamicResource MutedBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                    <Setter TargetName="SearchSurface" Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="SearchSurface" Property="Opacity" Value="0.56"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
             <Style TargetType="ListBoxItem">
                 <Setter Property="Padding" Value="0"/>
                 <Setter Property="Margin" Value="0,0,0,5"/>
@@ -257,7 +283,7 @@
                 </Border>
             </DockPanel>
             <Grid Grid.Row="1" Margin="0,0,0,5">
-                <TextBox x:Name="SearchBox" Height="34" Padding="28,5,6,5"
+                <TextBox x:Name="SearchBox" Style="{StaticResource RoundedSearchBox}" Height="34" Padding="28,5,6,5"
                          AutomationProperties.Name="Search clipboard" ToolTip="Search titles and clipboard text"/>
                 <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" Margin="9,0,0,0"
                            Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" IsHitTestVisible="False"/>

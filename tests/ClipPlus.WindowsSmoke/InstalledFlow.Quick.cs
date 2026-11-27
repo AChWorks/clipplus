@@ -104,6 +104,15 @@ internal static partial class InstalledFlow
         return icon;
     }
 
+    private static void OpenIconSearch(nint icon, nint popup)
+    {
+        PointerClick(QuickRequire(icon, "Open pinned clipboard"));
+        Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 &&
+            Native.GetForegroundWindow() == popup && !Native.IsNoActivate(popup) &&
+            QuickFind(popup, "Search pinned clips")?.Current.HasKeyboardFocus == true,
+            "floating icon click immediately focuses the expanded search");
+    }
+
     private static void VerifyFloatingBounds(nint popup, Native.Point anchor, PopupGeometry geometry)
     {
         var monitor = Native.MonitorFromPoint(anchor, 2);
@@ -297,11 +306,26 @@ internal static partial class InstalledFlow
                 "floating icon drag persists at work-area edge without opening or stealing focus");
             var dragged = Bounds(icon);
             var iconAnchor = new Native.Point { X = dragged.Left, Y = dragged.Top };
-            PointerClick(QuickRequire(icon, "Open pinned clipboard"));
-            Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 &&
-                Native.GetForegroundWindow() == otherHwnd && QuickFind(popup, "Paste: " + title) is not null,
-                "icon click opens pinned panel without activating it");
+            OpenIconSearch(icon, popup);
             VerifyFloatingBounds(popup, iconAnchor, Preferences.Load(settings).QuickPanel);
+            // Type immediately, without a second search-field click. The
+            // previously active independent editor must receive the payload.
+            foreach (var key in "SECONDARY")
+                SendKeys(KeyInput((ushort)key), KeyInput((ushort)key, true));
+            Wait(() => QuickQuery(popup).Equals("secondary", StringComparison.OrdinalIgnoreCase) &&
+                SelectedTitle(secondaryTitle) && QuickFind(popup, "Paste: " + title) is null,
+                "typing immediately after icon click filters and selects the pin");
+            SendKeys(KeyInput(0x0D), KeyInput(0x0D, true));
+            Wait(() => IsWindowVisible(popup) && Native.GetForegroundWindow() == otherHwnd &&
+                OtherText() == secondary && QuickQuery(popup) == "" && Native.IsNoActivate(popup) &&
+                QuickFind(popup, "Paste: " + title) is not null,
+                "icon-focused keyboard paste returns to the original editor, clears search and stays passive");
+            Pump(TimeSpan.FromMilliseconds(200));
+            if (OtherText() != secondary || Native.GetForegroundWindow() != otherHwnd)
+                throw new InvalidOperationException("Icon-focused paste duplicated content or stole focus.");
+            SetValue(OtherEditor(), "");
+            Wait(() => OtherText() == "" && Native.GetForegroundWindow() == otherHwnd,
+                "independent editor cleared for retained passive paste regression");
             // Leave the actual installed/portable panel untouched. Idle
             // alone must not collapse it, and the first outside gesture
             // still has to work without Resize, activation or another click.
@@ -337,9 +361,8 @@ internal static partial class InstalledFlow
             SetValue(QuickRequire(popup, "Search pinned clips"), "secondary");
             FocusOther();
             icon = RequireCollapsed(popup, otherHwnd);
-            PointerClick(QuickRequire(icon, "Open pinned clipboard"));
-            Wait(() => IsWindowVisible(popup) && QuickQuery(popup) == "secondary" &&
-                Native.GetForegroundWindow() == otherHwnd, "collapse preserves query and reopens against current external target");
+            OpenIconSearch(icon, popup);
+            Wait(() => QuickQuery(popup) == "secondary", "icon-focused reopening preserves the existing query");
             var priorOther = OtherText();
             var priorFirst = editor.Text;
             if (!Native.OpenClipboard(hwnd)) throw Native.Error("Hold clipboard for quick cancellation");
@@ -379,11 +402,17 @@ internal static partial class InstalledFlow
                 if (actualAnchor.Left != iconAnchor.X || actualAnchor.Top != iconAnchor.Y)
                     throw new InvalidOperationException(operation + " changed the independent floating anchor.");
                 if (reopenByShortcut) SendShortcut(shortcut);
-                else PointerClick(QuickRequire(collapsed, "Open pinned clipboard"));
+                else
+                {
+                    OpenIconSearch(collapsed, popup);
+                    // Return to passive mode without another outside mouse
+                    // gesture; retain the already-foreground resize regression.
+                    QuickFocus(target, editor);
+                }
                 reopenByShortcut = !reopenByShortcut;
                 Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 &&
-                    Native.GetForegroundWindow() == hwnd && QuickQuery(popup) == query,
-                    operation + ": first outside click collapses, then reopen preserves query and foreground");
+                    Native.GetForegroundWindow() == hwnd && Native.IsNoActivate(popup) && QuickQuery(popup) == query,
+                    operation + ": first outside click collapses, then reopen preserves query and the intended focus mode");
                 VerifyFloatingBounds(popup, iconAnchor, geometry.QuickPanel);
                 var reopened = Preferences.Load(settings);
                 if (reopened.Geometry(false) != normal.Geometry(false) ||
@@ -506,9 +535,7 @@ internal static partial class InstalledFlow
         var iconBounds = Bounds(icon);
         if (Math.Abs(iconBounds.Left - position.X) > 2 || Math.Abs(iconBounds.Top - position.Y) > 2)
             throw new InvalidOperationException("Restart changed the independently saved floating icon anchor.");
-        PointerClick(QuickRequire(icon, "Open pinned clipboard"));
-        Wait(() => IsWindowVisible(popup) && VisibleIcon(popup) == 0 && Native.GetForegroundWindow() == target,
-            "restarted floating icon opens without stealing focus");
+        OpenIconSearch(icon, popup);
         VerifyFloatingBounds(popup, anchor, preferences.QuickPanel);
         PointerClick(QuickRequire(popup, "Return to clipboard history"));
         Wait(() => Native.GetForegroundWindow() == popup && QuickFind(popup, "Search clipboard") is not null,
